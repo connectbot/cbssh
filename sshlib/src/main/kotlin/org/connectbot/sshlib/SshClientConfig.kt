@@ -63,6 +63,7 @@ class SshClientConfig private constructor(
     val sessionWindowSize: Int,
     val sftpWindowSize: Int,
     val environment: Map<String, String>,
+    val keepAliveIntervalMs: Long,
 ) {
     class Builder {
         /**
@@ -161,6 +162,21 @@ class SshClientConfig private constructor(
          */
         var environment: Map<String, String> = emptyMap()
 
+        /**
+         * Send an SSH_MSG_IGNORE heartbeat every N milliseconds to keep the
+         * connection alive across NAT/VPN/firewall idle timeouts.
+         *
+         * The message is a single empty payload that the server silently ignores
+         * (RFC 4253 §11.2). It does NOT expect a response — this is purely to
+         * prevent intermediaries from killing the TCP connection during idle.
+         *
+         * Recommended for long-lived connections behind aggressive firewalls.
+         * Set to 0 to disable (default).
+         *
+         * Common values: 15000 (15s, sshj default), 30000 (30s).
+         */
+        var keepAliveIntervalMs: Long = 0L
+
         fun build(): SshClientConfig {
             val environmentSnapshot = LinkedHashMap(environment)
             require(environmentSnapshot.all { (name, value) -> '\u0000' !in name && '\u0000' !in value }) {
@@ -176,6 +192,9 @@ class SshClientConfig private constructor(
             }
             require(sessionWindowSize > 0) { "sessionWindowSize must be positive" }
             require(sftpWindowSize > 0) { "sftpWindowSize must be positive" }
+            require(keepAliveIntervalMs >= 0) {
+                "keepAliveIntervalMs must be non-negative"
+            }
 
             val verifier = hostKeyVerifier
             requireNotNull(verifier) { "hostKeyVerifier must be set" }
@@ -202,6 +221,7 @@ class SshClientConfig private constructor(
                 sessionWindowSize,
                 sftpWindowSize,
                 Collections.unmodifiableMap(environmentSnapshot),
+                keepAliveIntervalMs,
             )
         }
     }

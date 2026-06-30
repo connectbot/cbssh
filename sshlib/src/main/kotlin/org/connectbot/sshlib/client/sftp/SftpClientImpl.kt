@@ -32,8 +32,8 @@ import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.SftpStatusCode
 import org.connectbot.sshlib.SshSession
 import org.connectbot.sshlib.client.asReadOnlyBuffer
-import org.connectbot.sshlib.protocol.ByteString
 import org.connectbot.sshlib.kaitaiParseFailureOrNull
+import org.connectbot.sshlib.protocol.ByteString
 import org.connectbot.sshlib.protocol.SftpAcceptedTransition
 import org.connectbot.sshlib.protocol.SftpCopyData
 import org.connectbot.sshlib.protocol.SftpState

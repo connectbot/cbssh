@@ -109,6 +109,7 @@ import org.connectbot.sshlib.protocol.SshMsgDebug
 import org.connectbot.sshlib.protocol.SshMsgDisconnect
 import org.connectbot.sshlib.protocol.SshMsgExtInfo
 import org.connectbot.sshlib.protocol.SshMsgGlobalRequest
+import org.connectbot.sshlib.protocol.SshMsgIgnore
 import org.connectbot.sshlib.protocol.SshMsgKexDhGexGroup
 import org.connectbot.sshlib.protocol.SshMsgKexDhGexInit
 import org.connectbot.sshlib.protocol.SshMsgKexDhGexReply
@@ -492,6 +493,8 @@ class SshConnection(
     @Volatile private var authRequestPending = false
 
     private var rekeyTimerJob: Job? = null
+    private var keepAliveJob: Job? = null
+    internal var keepAliveIntervalMs: Long = 0L
 
     @Volatile private var pendingConnect: CompletableDeferred<ConnectResult>? = null
     private var dhGexGroup: SshMsgKexDhGexGroup? = null
@@ -538,6 +541,7 @@ class SshConnection(
             closeMutex.withLock {
                 if (transportClosing) return@withLock
                 transportClosing = true
+                keepAliveJob?.cancel()
                 try {
                     transport.close()
                 } catch (failure: Exception) {
@@ -547,6 +551,37 @@ class SshConnection(
                 } finally {
                     outboundPacketController.close()
                 }
+            }
+        }
+    }
+
+    /**
+     * Send an SSH_MSG_IGNORE heartbeat to the server.
+     * The server silently discards this message (RFC 4253 §11.2).
+     * Used to keep NAT/VPN/firewall connections alive during idle.
+     */
+    internal suspend fun writeIgnore() {
+        val msg = SshMsgIgnore().apply {
+            setData(createByteString(byteArrayOf()))
+            _check()
+        }
+        writePacket(SshEnums.MessageType.SSH_MSG_IGNORE.id().toInt(), msg.toByteArray())
+    }
+
+    /** Each connection owns its heartbeat, which is retired with its transport. */
+    private fun startKeepAlive() {
+        val intervalMs = keepAliveIntervalMs
+        if (intervalMs <= 0 || transportClosing || keepAliveJob?.isActive == true) return
+        keepAliveJob = connectionScope.launch {
+            try {
+                while (isActive) {
+                    delay(intervalMs)
+                    writeIgnore()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.warn("Keepalive failed, stopping", e)
             }
         }
     }
@@ -1835,6 +1870,7 @@ class SshConnection(
         logger.info("Authentication successful")
         authRequestPending = false
         packetIO.activateCompression()
+        startKeepAlive()
         pendingAuth.complete(true)
     }
 
@@ -3081,6 +3117,7 @@ class SshConnection(
                 }
                 loopException = loopFailure
             } finally {
+                keepAliveJob?.cancel()
                 val loopError = loopException ?: Exception("Packet loop terminated")
                 withContext(NonCancellable) {
                     connectionScope.cancel()

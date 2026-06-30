@@ -187,6 +187,7 @@ class SshClient private constructor(
         )
         sshConnection.autoDisconnectOnLastChannelClose = config.autoDisconnectOnLastChannelClose
         sshConnection.sessionWindowSize = config.sessionWindowSize
+        sshConnection.keepAliveIntervalMs = config.keepAliveIntervalMs
         val result = sshConnection.connect()
 
         if (result is ConnectResult.Success) {

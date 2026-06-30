@@ -110,6 +110,7 @@ class FakeSshServer(
     var kexAlgorithms: String? = null
     var corruptKexSignature: Boolean = false
     var sendDuplicateKexInitDuringRekey: Boolean = false
+    val receivedIgnores = mutableListOf<SshMsgIgnore>()
     private val receivedPongs = Channel<ByteArray>(Channel.UNLIMITED)
     private val receivedExtInfo = Channel<SshMsgExtInfo>(Channel.UNLIMITED)
     private val receivedUserauthRequests = Channel<SshMsgUserauthRequest>(Channel.UNLIMITED)
@@ -311,6 +312,12 @@ class FakeSshServer(
                             val unimplemented = SshMsgUnimplemented(ByteBufferKaitaiStream(bodyBytes))
                             unimplemented._read()
                             receivedUnimplemented.trySend(unimplemented)
+                        }
+
+                        SshEnums.MessageType.SSH_MSG_IGNORE -> {
+                            val msg = SshMsgIgnore(ByteBufferKaitaiStream(rawBytes.copyOfRange(1, rawBytes.size)))
+                            msg._read()
+                            receivedIgnores += msg
                         }
 
                         else -> { /* ignore */ }
