@@ -33,9 +33,14 @@ import org.connectbot.sshlib.SftpStatusCode
 import org.connectbot.sshlib.SshSession
 import org.connectbot.sshlib.client.asReadOnlyBuffer
 import org.connectbot.sshlib.protocol.ByteString
+import org.connectbot.sshlib.kaitaiParseFailureOrNull
 import org.connectbot.sshlib.protocol.SftpAcceptedTransition
+import org.connectbot.sshlib.protocol.SftpCopyData
 import org.connectbot.sshlib.protocol.SftpState
 import org.connectbot.sshlib.protocol.SftpStateMachine
+import org.connectbot.sshlib.protocol.SftpVersion
+import org.connectbot.sshlib.protocol.createByteString
+import org.connectbot.sshlib.protocol.toByteArray
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
@@ -54,6 +59,7 @@ internal class SftpClientImpl private constructor(
     private val readJob: Job,
     override val protocolVersion: Int,
     private val stateMachine: SftpStateMachine,
+    override val extensions: Set<String>,
 ) : SftpClient {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -263,6 +269,31 @@ internal class SftpClientImpl private constructor(
         return dispatchStatusRequest(SSH_FXP_RENAME, payload.array())
     }
 
+    // --- Server-side data copy (OpenSSH extension) ---
+
+    override suspend fun copyData(
+        srcHandle: SftpFileHandle,
+        srcOffset: Long,
+        length: Long,
+        dstHandle: SftpFileHandle,
+        dstOffset: Long,
+        timeoutMs: Long,
+    ): SftpResult<Unit> {
+        if (srcOffset < 0 || length < 0 || dstOffset < 0 || timeoutMs < 0) {
+            return SftpResult.ProtocolError("Copy offsets, length, and timeout must be non-negative")
+        }
+        val payload = SftpCopyData().apply {
+            setExtensionName(createByteString(EXT_COPY_DATA.toByteArray(StandardCharsets.US_ASCII)))
+            setSrcHandle(createByteString(srcHandle.handle))
+            setSrcOffset(srcOffset)
+            setLength(length)
+            setDstHandle(createByteString(dstHandle.handle))
+            setDstOffset(dstOffset)
+            _check()
+        }
+        return dispatchStatusRequest(SSH_FXP_EXTENDED, payload.toByteArray(), timeoutMs = timeoutMs)
+    }
+
     // --- Path operations ---
 
     override suspend fun realpath(path: String): SftpResult<String> {
@@ -341,15 +372,17 @@ internal class SftpClientImpl private constructor(
         type: Int,
         payload: ByteArray,
         transition: SftpTransition = stateMachine::request,
+        timeoutMs: Long = 30_000L,
         map: (SftpRawPacket) -> SftpResult<T>,
-    ): SftpResult<T> = dispatchRequest(type, listOf(payload), transition, map)
+    ): SftpResult<T> = dispatchRequest(type, listOf(payload), transition, timeoutMs, map)
 
     private suspend fun <T> dispatchRequest(
         type: Int,
         payload: List<ByteArray>,
         transition: SftpTransition = stateMachine::request,
+        timeoutMs: Long = 30_000L,
         map: (SftpRawPacket) -> SftpResult<T>,
-    ): SftpResult<T> = when (val result = dispatcher.request(type, payload) { action -> transition { action() } }) {
+    ): SftpResult<T> = when (val result = dispatcher.request(type, payload, timeoutMs) { action -> transition { action() } }) {
         is SftpResult.Success -> try {
             map(result.value)
         } catch (e: SftpDecodeException) {
@@ -370,13 +403,15 @@ internal class SftpClientImpl private constructor(
         type: Int,
         payload: ByteArray,
         transition: SftpTransition = stateMachine::request,
-    ): SftpResult<Unit> = dispatchStatusRequest(type, listOf(payload), transition)
+        timeoutMs: Long = 30_000L,
+    ): SftpResult<Unit> = dispatchStatusRequest(type, listOf(payload), transition, timeoutMs)
 
     private suspend fun dispatchStatusRequest(
         type: Int,
         payload: List<ByteArray>,
         transition: SftpTransition = stateMachine::request,
-    ): SftpResult<Unit> = dispatchRequest(type, payload, transition) { response ->
+        timeoutMs: Long = 30_000L,
+    ): SftpResult<Unit> = dispatchRequest(type, payload, transition, timeoutMs) { response ->
         if (response.type == SSH_FXP_STATUS) {
             val status = decodeStatus(response.payloadBuffer)
             if (status == SftpStatusCode.OK) {
@@ -428,14 +463,23 @@ internal class SftpClientImpl private constructor(
         private const val SSH_FXP_NAME = 104
         private const val SSH_FXP_ATTRS = 105
 
+        private const val SSH_FXP_EXTENDED = 200
+
         private const val SFTP_VERSION = 3
+
+        /** OpenSSH SFTP extension (added in OpenSSH 9.0) for server-side data copy. */
+        private const val EXT_COPY_DATA = "copy-data"
 
         /**
          * Create an SFTP client by performing the INIT/VERSION handshake.
          */
         suspend fun create(session: SshSession): SftpResult<SftpClient> = create(session, SftpPacketIO(session))
 
-        internal suspend fun create(session: SshSession, packetIO: SftpPacketTransport): SftpResult<SftpClient> {
+        internal suspend fun create(
+            session: SshSession,
+            packetIO: SftpPacketTransport,
+            readScope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+        ): SftpResult<SftpClient> {
             val stateMachine = SftpStateMachine()
             val dispatcher = SftpDispatcher(packetIO, stateMachine)
 
@@ -466,18 +510,23 @@ internal class SftpClientImpl private constructor(
                     "Expected SSH_FXP_VERSION (2), got ${versionPacket.type}",
                 )
             }
-            if (versionPacket.payloadBuffer.remaining() < 4) {
-                return SftpResult.ProtocolError("SSH_FXP_VERSION payload too short")
+            val version = try {
+                SftpVersion(ByteBufferKaitaiStream(versionPacket.payloadBuffer)).apply { _read() }
+            } catch (e: Exception) {
+                if (e.kaitaiParseFailureOrNull() == null) throw e
+                return SftpResult.ProtocolError("Malformed SSH_FXP_VERSION payload")
             }
-            val serverVersion = versionPacket.payloadBuffer.int
-            val negotiatedVersion = minOf(SFTP_VERSION, serverVersion)
-            logger.info("SFTP version negotiated: {} (server: {})", negotiatedVersion, serverVersion)
+            val negotiatedVersion = minOf(SFTP_VERSION.toLong(), version.version()).toInt()
+            logger.info("SFTP version negotiated: {} (server: {})", negotiatedVersion, version.version())
+            val extensions = version.extensions().map { String(it.name().data(), StandardCharsets.UTF_8) }.toSet()
+            if (extensions.isNotEmpty()) {
+                logger.info("SFTP server extensions: {}", extensions)
+            }
 
             // Start the background read loop
-            val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            val readJob = dispatcher.startReadLoop(scope)
+            val readJob = dispatcher.startReadLoop(readScope)
 
-            return SftpResult.Success(SftpClientImpl(session, dispatcher, readJob, negotiatedVersion, stateMachine))
+            return SftpResult.Success(SftpClientImpl(session, dispatcher, readJob, negotiatedVersion, stateMachine, extensions))
         }
 
         // --- Wire format helpers ---

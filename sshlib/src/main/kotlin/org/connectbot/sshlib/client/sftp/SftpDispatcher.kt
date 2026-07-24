@@ -18,6 +18,7 @@
 package org.connectbot.sshlib.client.sftp
 
 import io.kaitai.struct.ByteBufferKaitaiStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -25,13 +26,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.protocol.SftpFrameHeader
 import org.connectbot.sshlib.protocol.SftpStateMachine
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -54,7 +56,7 @@ internal class SftpDispatcher(
      *
      * @param type SFTP message type
      * @param payload Request payload (without request ID — it will be prepended)
-     * @param timeoutMs Maximum time to wait for a response
+     * @param timeoutMs Maximum time to wait for a response; 0 waits until completion or disconnect
      * @return The raw response packet
      */
     suspend fun request(type: Int, payload: ByteArray, timeoutMs: Long = 30_000L): SftpResult<SftpRawPacket> = request(type, payload, timeoutMs) { action ->
@@ -129,13 +131,19 @@ internal class SftpDispatcher(
         }
 
         return try {
-            val packet = withTimeout(timeoutMs) {
+            val packet = if (timeoutMs == 0L) {
                 response.await()
+            } else {
+                withTimeoutOrNull(timeoutMs) { response.await() }
+                    ?: return SftpResult.IoError(TimeoutException("SFTP request timed out"))
             }
             SftpResult.Success(packet)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            pending.remove(requestId)
             SftpResult.IoError(e)
+        } finally {
+            pending.remove(requestId)
         }
     }
 

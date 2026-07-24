@@ -17,12 +17,19 @@
 
 package org.connectbot.sshlib.client.sftp
 
+import io.kaitai.struct.ByteBufferKaitaiStream
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import org.connectbot.sshlib.SessionExit
 import org.connectbot.sshlib.SftpAttributes
@@ -33,6 +40,7 @@ import org.connectbot.sshlib.SftpOpenFlag
 import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.SftpStatusCode
 import org.connectbot.sshlib.SshSession
+import org.connectbot.sshlib.protocol.SftpCopyData
 import org.junit.jupiter.api.Test
 import java.nio.ByteBuffer
 import kotlin.test.assertContentEquals
@@ -42,6 +50,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class SftpClientImplTest {
 
     @Test
@@ -319,6 +328,157 @@ class SftpClientImplTest {
     }
 
     @Test
+    fun `create parses extension pairs from the VERSION reply`() = runBlocking {
+        val session = FakeSshSession()
+        session.enqueueRead(
+            packet(
+                SSH_FXP_VERSION,
+                versionPayloadWithExtensions(
+                    3,
+                    "copy-data" to "1",
+                    "posix-rename@openssh.com" to "1",
+                ),
+            ),
+        )
+        val client = assertSuccess(SftpClientImpl.create(session))
+
+        assertEquals(setOf("copy-data", "posix-rename@openssh.com"), client.extensions)
+    }
+
+    @Test
+    fun `create tolerates a VERSION reply with no extensions`() = runBlocking {
+        // Same payload shape createClient() already uses elsewhere in this file:
+        // just the 4-byte version int, nothing trailing.
+        val session = FakeSshSession()
+        val client = createClient(session)
+
+        assertEquals(emptySet(), client.extensions)
+    }
+
+    @Test
+    fun `copyData sends the copy-data extension request and maps responses`() = runBlocking {
+        val srcHandle = SftpFileHandle(byteArrayOf(1, 2))
+        val dstHandle = SftpFileHandle(byteArrayOf(3, 4))
+        var capturedPayload: ByteArray? = null
+
+        val okSession = FakeSshSession(
+            responseFor = { type, payload ->
+                if (type == SSH_FXP_EXTENDED) capturedPayload = payload
+                response(SSH_FXP_STATUS, statusPayload(SftpStatusCode.OK))
+            },
+        )
+        val client = createClient(okSession)
+
+        val result = client.copyData(srcHandle, 10L, 20L, dstHandle, 30L)
+
+        assertEquals(SftpResult.Success(Unit), result)
+        assertEquals(listOf(SSH_FXP_EXTENDED), okSession.requestTypes)
+
+        // Verify the wire payload: string "copy-data", then src handle/offset/length,
+        // then dst handle/offset — matches the OpenSSH PROTOCOL definition.
+        val payload = SftpCopyData(ByteBufferKaitaiStream(capturedPayload!!)).apply { _read() }
+        assertEquals("copy-data", String(payload.extensionName().data(), Charsets.US_ASCII))
+        assertContentEquals(srcHandle.handle, payload.srcHandle().data())
+        assertEquals(10L, payload.srcOffset())
+        assertEquals(20L, payload.length())
+        assertContentEquals(dstHandle.handle, payload.dstHandle().data())
+        assertEquals(30L, payload.dstOffset())
+
+        val errorSession = FakeSshSession(
+            responseFor = { _, _ -> response(SSH_FXP_STATUS, statusPayload(SftpStatusCode.OP_UNSUPPORTED, "no copy-data")) },
+        )
+        val errorClient = createClient(errorSession)
+        val errorResult = errorClient.copyData(srcHandle, 0L, 0L, dstHandle, 0L)
+        val serverError = assertIs<SftpResult.ServerError>(errorResult)
+        assertEquals(SftpStatusCode.OP_UNSUPPORTED, serverError.statusCode)
+    }
+
+    @Test
+    fun `create rejects truncated or oversized VERSION extension pairs`() = runBlocking {
+        val tails = listOf(
+            byteArrayOf(0),
+            ByteBuffer.allocate(4).putInt(Int.MAX_VALUE).array(),
+            stringPayload("copy-data".toByteArray()),
+            stringPayload("copy-data".toByteArray()) + ByteBuffer.allocate(4).putInt(10).array() + byteArrayOf(1),
+        )
+        for (tail in tails) {
+            val session = FakeSshSession()
+            session.enqueueRead(packet(SSH_FXP_VERSION, ByteBuffer.allocate(4).putInt(3).array() + tail))
+            assertIs<SftpResult.ProtocolError>(SftpClientImpl.create(session))
+            session.close()
+        }
+    }
+
+    @Test
+    fun `copyData waits beyond thirty seconds by default`() = runTest {
+        val session = FakeSshSession(respondAutomatically = false)
+        session.enqueueRead(packet(SSH_FXP_VERSION, ByteBuffer.allocate(4).putInt(3).array()))
+        val client = assertSuccess(SftpClientImpl.create(session, SftpPacketIO(session), backgroundScope))
+        try {
+            val copy = async { client.copyData(SftpFileHandle(byteArrayOf(1)), 0, 0, SftpFileHandle(byteArrayOf(2)), 0) }
+            runCurrent()
+            advanceTimeBy(31_000)
+            runCurrent()
+            assertFalse(copy.isCompleted)
+            session.enqueueRead(responsePacket(SSH_FXP_STATUS, session.requestIds.single(), statusPayload(SftpStatusCode.OK)))
+            assertEquals(SftpResult.Success(Unit), copy.await())
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
+    fun `copyData supports a timeout and ignores its late response`() = runTest {
+        val session = FakeSshSession(respondAutomatically = false)
+        session.enqueueRead(packet(SSH_FXP_VERSION, ByteBuffer.allocate(4).putInt(3).array()))
+        val client = assertSuccess(SftpClientImpl.create(session, SftpPacketIO(session), backgroundScope))
+        try {
+            val copy = async {
+                client.copyData(SftpFileHandle(byteArrayOf(1)), 0, 0, SftpFileHandle(byteArrayOf(2)), 0, timeoutMs = 100)
+            }
+            assertIs<SftpResult.IoError>(copy.await())
+            session.enqueueRead(responsePacket(SSH_FXP_STATUS, session.requestIds.single(), statusPayload(SftpStatusCode.OK)))
+            val next = async { client.remove("/tmp/next") }
+            runCurrent()
+            session.enqueueRead(responsePacket(SSH_FXP_STATUS, session.requestIds.last(), statusPayload(SftpStatusCode.OK)))
+            assertEquals(SftpResult.Success(Unit), next.await())
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
+    fun `copyData propagates caller cancellation and unblocks on disconnect`() = runTest {
+        val session = FakeSshSession(respondAutomatically = false)
+        session.enqueueRead(packet(SSH_FXP_VERSION, ByteBuffer.allocate(4).putInt(3).array()))
+        val client = assertSuccess(SftpClientImpl.create(session, SftpPacketIO(session), backgroundScope))
+        val copy = async { client.copyData(SftpFileHandle(byteArrayOf(1)), 0, 0, SftpFileHandle(byteArrayOf(2)), 0) }
+        runCurrent()
+        copy.cancelAndJoin()
+        assertTrue(copy.isCancelled)
+        val next = async { client.copyData(SftpFileHandle(byteArrayOf(1)), 0, 0, SftpFileHandle(byteArrayOf(2)), 0) }
+        runCurrent()
+        client.close()
+        assertIs<SftpResult.IoError>(next.await())
+    }
+
+    @Test
+    fun `copyData rejects negative offsets lengths and timeouts before writing`() = runBlocking {
+        val session = FakeSshSession()
+        val client = createClient(session)
+        try {
+            val handle = SftpFileHandle(byteArrayOf(1))
+            assertIs<SftpResult.ProtocolError>(client.copyData(handle, -1, 0, handle, 0))
+            assertIs<SftpResult.ProtocolError>(client.copyData(handle, 0, -1, handle, 0))
+            assertIs<SftpResult.ProtocolError>(client.copyData(handle, 0, 0, handle, -1))
+            assertIs<SftpResult.ProtocolError>(client.copyData(handle, 0, 0, handle, 0, -1))
+            assertTrue(session.requestTypes.isEmpty())
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
     fun `dispatcher propagates request write failures`() {
         runBlocking {
             val client = createClient(FakeSshSession(failAfterHandshake = IllegalStateException("write failed")))
@@ -408,6 +568,24 @@ class SftpClientImplTest {
         return packet(type, responsePayload.array())
     }
 
+    /** Builds a VERSION reply payload: 4-byte version int + name/data string pairs. */
+    private fun versionPayloadWithExtensions(version: Int, vararg extensions: Pair<String, String>): ByteArray {
+        val encodedPairs = extensions.map { (name, data) ->
+            val nameBytes = name.toByteArray(Charsets.UTF_8)
+            val dataBytes = data.toByteArray(Charsets.UTF_8)
+            ByteBuffer.allocate(4 + nameBytes.size + 4 + dataBytes.size).apply {
+                putInt(nameBytes.size)
+                put(nameBytes)
+                putInt(dataBytes.size)
+                put(dataBytes)
+            }.array()
+        }
+        val payload = ByteBuffer.allocate(4 + encodedPairs.sumOf { it.size })
+        payload.putInt(version)
+        encodedPairs.forEach(payload::put)
+        return payload.array()
+    }
+
     private fun stringPayload(data: ByteArray): ByteArray {
         val payload = ByteBuffer.allocate(4 + data.size)
         payload.putInt(data.size)
@@ -457,11 +635,13 @@ class SftpClientImplTest {
         },
         private val writeFailure: Throwable? = null,
         private val failAfterHandshake: Throwable? = null,
+        private val respondAutomatically: Boolean = true,
     ) : SshSession {
         private val reads = Channel<ByteArray>(Channel.UNLIMITED)
         private var writes = 0
         private var open = true
         val requestTypes = mutableListOf<Int>()
+        val requestIds = mutableListOf<Int>()
         var closeCalls = 0
 
         override val localChannelNumber: Int = 1
@@ -518,6 +698,8 @@ class SftpClientImplTest {
             val requestId = ByteBuffer.wrap(payload, 0, 4).int
             val requestPayload = payload.copyOfRange(4, payload.size)
             requestTypes += type
+            requestIds += requestId
+            if (!respondAutomatically) return
             val response = responseFor(type, requestPayload)
             enqueueRead(responsePacket(response.type, requestId, response.payload))
         }
@@ -571,5 +753,6 @@ class SftpClientImplTest {
         const val SSH_FXP_DATA = 103
         const val SSH_FXP_NAME = 104
         const val SSH_FXP_ATTRS = 105
+        const val SSH_FXP_EXTENDED = 200
     }
 }
