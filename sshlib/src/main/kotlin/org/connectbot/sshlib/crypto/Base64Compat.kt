@@ -59,6 +59,8 @@ internal object Base64Compat {
     }
 
     private class AndroidDelegate(cls: Class<*>) : Delegate {
+        private val fallback = JvmDelegate()
+
         // android.util.Base64 flag constants
         private val NO_WRAP = cls.getField("NO_WRAP").getInt(null)
         private val NO_PADDING = cls.getField("NO_PADDING").getInt(null)
@@ -67,14 +69,24 @@ internal object Base64Compat {
         private val encodeMethod = cls.getMethod("encodeToString", ByteArray::class.java, Int::class.java)
         private val decodeMethod = cls.getMethod("decode", String::class.java, Int::class.java)
 
-        override fun encode(data: ByteArray): String = encodeMethod.invoke(null, data, NO_WRAP or NO_PADDING) as String
+        override fun encode(data: ByteArray): String = invokeOrFallback(data, fallback::encode) {
+            encodeMethod.invoke(null, data, NO_WRAP or NO_PADDING) as String
+        }
 
-        override fun encodeWithPadding(data: ByteArray): String = encodeMethod.invoke(null, data, NO_WRAP) as String
+        override fun encodeWithPadding(data: ByteArray): String = invokeOrFallback(data, fallback::encodeWithPadding) {
+            encodeMethod.invoke(null, data, NO_WRAP) as String
+        }
 
         override fun decode(data: String): ByteArray = try {
             decodeMethod.invoke(null, data, DEFAULT) as ByteArray
         } catch (e: InvocationTargetException) {
-            throw e.targetException
+            fallback.decode(data)
+        }
+
+        private inline fun invokeOrFallback(data: ByteArray, fallback: (ByteArray) -> String, call: () -> String): String = try {
+            call()
+        } catch (_: InvocationTargetException) {
+            fallback(data)
         }
     }
 }
