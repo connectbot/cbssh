@@ -1,6 +1,6 @@
 /*
  * ConnectBot SSH Library
- * Copyright 2025 Kenny Root
+ * Copyright 2025-2026 Kenny Root
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -150,20 +150,22 @@ internal object OpenSshKeyWriter {
                 privKey.bytes.orElseThrow { SshException("Cannot extract Ed25519 seed") }
             }
 
-            privKey.javaClass.name.contains("Ed25519PrivateKey") -> {
+            else -> {
                 // Our Ed25519PrivateKey or similar — extract from PKCS#8 encoding
                 val encoded = privKey.encoded
-                val reader = DerReader(encoded)
-                reader.readSequence { seq ->
-                    seq.readInteger() // version
-                    seq.readSequence { algId -> while (algId.hasRemaining()) algId.skipTag() }
-                    val innerBytes = seq.readOctetString()
-                    val innerReader = DerReader(innerBytes)
-                    innerReader.readOctetString()
+                runCatching {
+                    val reader = DerReader(encoded)
+                    reader.readSequence { seq ->
+                        seq.readInteger() // version
+                        seq.readSequence { algId -> while (algId.hasRemaining()) algId.skipTag() }
+                        val innerBytes = seq.readOctetString()
+                        val innerReader = DerReader(innerBytes)
+                        innerReader.readOctetString()
+                    }
+                }.getOrElse {
+                    throw SshException("Cannot extract Ed25519 seed from ${privKey.javaClass}", it)
                 }
             }
-
-            else -> throw SshException("Cannot extract Ed25519 seed from ${privKey.javaClass}")
         }
     }
 
