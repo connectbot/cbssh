@@ -102,7 +102,14 @@ Kaitai's `AsciiString` validates that the string is ≤ 65535 bytes. Do not use 
 This codebase has a carefully designed concurrency model. Violating these rules introduces
 races, deadlocks, or thread starvation.
 
-**`stateMachineDispatcher` is the single-threaded serialization point:**
+**Connection protocol state has two serialization layers:**
+- `stateMachineDispatcher` serializes connection-owned bookkeeping between suspension points.
+- `SshClientStateMachine` uses an internal `Mutex` to serialize complete event processing,
+  including suspending transition callbacks. A limited-parallelism dispatcher is not a mutex:
+  another coroutine may run on it while the first coroutine is suspended.
+- Every caller must receive the final `PROCESSED` or `IGNORED` result for its own event. The
+  KStateMachine pending-event handler throws because `PENDING` would make packet authorization
+  ambiguous.
 - All reads and writes of protocol state (`pendingAuth`, `pendingChannelOpen`,
   `pendingChannelRequest`, `pendingGlobalRequest`, `currentAuthMethod`, `authResultChannel`,
   `infoRequestChannel`) must happen inside `withContext(stateMachineDispatcher)`.

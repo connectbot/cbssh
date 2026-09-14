@@ -17,6 +17,8 @@
 
 package org.connectbot.sshlib.protocol
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.nsk.kstatemachine.event.Event
 import ru.nsk.kstatemachine.state.HistoryState
 import ru.nsk.kstatemachine.state.HistoryType
@@ -34,6 +36,7 @@ import ru.nsk.kstatemachine.state.transition
 import ru.nsk.kstatemachine.statemachine.ProcessingResult
 import ru.nsk.kstatemachine.statemachine.StateMachine
 import ru.nsk.kstatemachine.statemachine.createStdLibStateMachine
+import ru.nsk.kstatemachine.statemachine.throwingPendingEventHandler
 import ru.nsk.kstatemachine.transition.TransitionParams
 import ru.nsk.kstatemachine.transition.onTriggered
 
@@ -60,6 +63,7 @@ import ru.nsk.kstatemachine.transition.onTriggered
 internal class SshClientStateMachine(
     private val callbacks: SshClientCallbacks,
 ) {
+    private val eventMutex = Mutex()
     private val parsedPacket = setOf(SshEventOrigin.PARSED_PACKET)
     private val localCommand = setOf(SshEventOrigin.LOCAL_COMMAND)
     private val rekeying = SshFormalGuard.Fact(SshBooleanFact.REKEYING)
@@ -117,6 +121,7 @@ internal class SshClientStateMachine(
     }
 
     private val stateMachine: StateMachine = createStdLibStateMachine {
+        pendingEventHandler = throwingPendingEventHandler()
         val waitVersion = state("WaitVersion")
         val waitKexInit = state("WaitKexInit")
         val waitKex = state("WaitKex")
@@ -598,7 +603,7 @@ internal class SshClientStateMachine(
 
     suspend fun receiveVersion(banner: IdBanner): Boolean = process(SshEvent.ReceiveVersion(banner))
 
-    suspend fun receiveKexInit(msg: SshMsgKexinit): Boolean {
+    suspend fun receiveKexInit(msg: SshMsgKexinit): Boolean = eventMutex.withLock {
         if (!isWaitingForKexInit()) return false
 
         val initialExchange = !callbacks.isRekeying()
@@ -608,7 +613,7 @@ internal class SshClientStateMachine(
             strictKexNegotiated -> SshEvent.ReceiveInitialStrictKexInit(msg)
             else -> SshEvent.ReceiveInitialNonStrictKexInit(msg)
         }
-        return process(event)
+        processDirect(event)
     }
 
     suspend fun receiveKexDhReply(msg: SshMsgKexdhReply): Boolean = process(SshEvent.ReceiveKex.DhReply(msg))
@@ -656,9 +661,9 @@ internal class SshClientStateMachine(
 
     suspend fun receiveIgnore(): Boolean = process(SshEvent.ReceiveIgnore)
 
-    suspend fun authorizeNonKexPacket(description: String): Boolean {
-        process(SshEvent.ReceiveNonKexPacket(description))
-        return !isDisconnected()
+    suspend fun authorizeNonKexPacket(description: String): Boolean = eventMutex.withLock {
+        processDirect(SshEvent.ReceiveNonKexPacket(description))
+        !isDisconnected()
     }
 
     suspend fun authorizeAuthenticationPacket(): Boolean = process(SshEvent.AuthorizeAuthenticationPacket)
@@ -689,7 +694,9 @@ internal class SshClientStateMachine(
 
     internal fun formalModel(): SshStateMachineFormalModel = stateMachine.toSshFormalModel()
 
-    private suspend fun process(event: SshEvent): Boolean = stateMachine.processEvent(event) == ProcessingResult.PROCESSED
+    private suspend fun process(event: SshEvent): Boolean = eventMutex.withLock { processDirect(event) }
+
+    private suspend fun processDirect(event: SshEvent): Boolean = stateMachine.processEvent(event) == ProcessingResult.PROCESSED
 }
 
 internal interface SshClientCallbacks {
