@@ -7,6 +7,12 @@ body:
     attributes:
       value: |
         This release automation is for maintainers only. Submissions from non-maintainers will be rejected by the workflow.
+
+        After opening this issue:
+        1. Add `release:prepare` to create the release PR.
+        2. Approve that PR and wait for its required CI checks. Leave it open and in draft; do not merge it or mark it ready for review.
+        3. Add `release:publish` to this issue. The action tags the release and advances the target branch.
+        4. Verify the tag-triggered artifact publishing run succeeds, then close this issue.
   - type: input
     id: releaseVersion
     attributes:

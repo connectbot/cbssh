@@ -12,75 +12,10 @@ jobs:
   prepare:
     name: Prepare release pull request
     if: github.event.label.name == 'release:prepare'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      GH_TOKEN: ${{ github.token }}
-      ISSUE_BODY: ${{ github.event.issue.body }}
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
-      RELEASE_ACTOR: ${{ github.event.sender.login }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          persist-credentials: false
-
-      - name: Authorize release actor
-        run: bash -c 'source .github/scripts/release-common.sh; require_maintainer'
-
-      - name: Set up JDK
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          validate-wrappers: true
-
-      - name: Create release app token
-        id: release-app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-pull-requests: write
-
-      - name: Prepare release branch
-        id: release
-        env:
-          PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
-        run: |
-          set -o pipefail
-          bash .github/scripts/prepare-release.sh 2>&1 | tee "${RUNNER_TEMP}/release-prepare.log"
-
-      - name: Open or update release pull request
-        env:
-          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
-        run: |
-          set -o pipefail
-          bash .github/scripts/upsert-release-pr.sh \
-          "${{ steps.release.outputs.release_version }}" \
-          "${{ steps.release.outputs.next_version }}" \
-          "${{ steps.release.outputs.target_branch }}" \
-          "${{ steps.release.outputs.work_branch }}" \
-          "${{ steps.release.outputs.tag_name }}" \
-          2>&1 | tee -a "${RUNNER_TEMP}/release-prepare.log"
-
-      - name: Comment on prepared release
-        run: >
-          gh issue comment "${ISSUE_NUMBER}"
-          --body "Prepared release PR for ${{ steps.release.outputs.tag_name }}
-          targeting ${{ steps.release.outputs.target_branch }}."
-
-      - name: Comment on failure
-        if: failure()
-        env:
-          PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
-        run: bash .github/scripts/comment-issue-failure.sh "${RUNNER_TEMP}/release-prepare.log" "Prepare release"
+    uses: connectbot/release-action/.github/workflows/prepare-release.yml@851920620b16b907783a16c7f93d984bbda1d2eb # main
+    with:
+      tag_prefix: "v"
+      gradle_no_push_prop: cbssh.release.noPush
+    secrets:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
