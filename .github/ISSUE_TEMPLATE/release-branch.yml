@@ -7,6 +7,8 @@ body:
     attributes:
       value: |
         This release branch automation is for maintainers only. Submissions from non-maintainers will be rejected by the workflow.
+
+        After opening this issue, add `release:branch`. Once the branch is created, open a Release issue targeting it and add `release:prepare`.
   - type: input
     id: maintenanceBranch
     attributes:

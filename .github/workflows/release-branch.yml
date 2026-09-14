@@ -12,43 +12,7 @@ jobs:
   branch:
     name: Create maintenance branch
     if: github.event.label.name == 'release:branch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      GH_TOKEN: ${{ github.token }}
-      ISSUE_BODY: ${{ github.event.issue.body }}
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
-      RELEASE_ACTOR: ${{ github.event.sender.login }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          persist-credentials: false
-
-      - name: Authorize release actor
-        run: bash -c 'source .github/scripts/release-common.sh; require_maintainer'
-
-      - name: Create release app token
-        id: release-app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-
-      - name: Create branch
-        env:
-          PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
-        run: |
-          set -o pipefail
-          bash .github/scripts/create-release-branch.sh 2>&1 | tee "${RUNNER_TEMP}/release-branch.log"
-
-      - name: Comment on failure
-        if: failure()
-        env:
-          PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
-        run: bash .github/scripts/comment-issue-failure.sh "${RUNNER_TEMP}/release-branch.log" "Create release branch"
+    uses: connectbot/release-action/.github/workflows/release-branch.yml@851920620b16b907783a16c7f93d984bbda1d2eb # main
+    secrets:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
