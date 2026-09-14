@@ -17,6 +17,8 @@
 
 package org.connectbot.sshlib.protocol
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import java.lang.reflect.Modifier
 import kotlin.test.Test
@@ -25,6 +27,50 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SshClientStateMachineTest {
+    @Test
+    fun `authorization waits for a suspended valid transition`() = runTest {
+        val callbacks = RecordingCallbacks()
+        val machine = authenticatedMachine(callbacks)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        callbacks.channelRequestHook = {
+            entered.complete(Unit)
+            release.await()
+        }
+
+        val request = async {
+            machine.sendChannelRequest(7, "window-change", false, SshMsgChannelRequest())
+        }
+        entered.await()
+        val authorization = async { machine.authorizeAuthenticatedPacket() }
+
+        release.complete(Unit)
+
+        assertTrue(request.await())
+        assertTrue(authorization.await())
+    }
+
+    @Test
+    fun `pending authorization cannot bypass authentication`() = runTest {
+        val callbacks = RecordingCallbacks()
+        val machine = authenticationReadyMachine(callbacks)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        callbacks.kexInitHook = {
+            entered.complete(Unit)
+            release.await()
+        }
+
+        val rekey = async { machine.requestRekey() }
+        entered.await()
+        val authorization = async { machine.authorizeAuthenticatedPacket() }
+
+        release.complete(Unit)
+
+        assertTrue(rekey.await())
+        assertFalse(authorization.await())
+    }
+
     @Test
     fun `network events cannot bypass authentication guards`() = runTest {
         val callbacks = RecordingCallbacks()
@@ -220,8 +266,24 @@ class SshClientStateMachineTest {
         assertTrue(Modifier.isPrivate(processMethod.modifiers))
     }
 
+    private suspend fun authenticationReadyMachine(callbacks: RecordingCallbacks): SshClientStateMachine = SshClientStateMachine(callbacks).also { machine ->
+        assertTrue(machine.connect())
+        assertTrue(machine.receiveVersion(IdBanner()))
+        assertTrue(machine.receiveKexInit(SshMsgKexinit()))
+        assertTrue(machine.receiveKexDhReply(SshMsgKexdhReply()))
+        assertTrue(machine.receiveNewKeys())
+        assertTrue(machine.receiveServiceAccept("ssh-userauth"))
+    }
+
+    private suspend fun authenticatedMachine(callbacks: RecordingCallbacks): SshClientStateMachine = authenticationReadyMachine(callbacks).also { machine ->
+        assertTrue(machine.beginAuthentication())
+        assertTrue(machine.authenticationSuccess())
+    }
+
     private class RecordingCallbacks : SshClientCallbacks {
         val actions = mutableListOf<String>()
+        var kexInitHook: suspend () -> Unit = {}
+        var channelRequestHook: suspend () -> Unit = {}
         var rekeying = false
         var authenticationRequestPending = false
         var strictKexNegotiated = false
@@ -237,6 +299,7 @@ class SshClientStateMachineTest {
         }
         override suspend fun sendKexInit() {
             actions += "sendKexInit"
+            kexInitHook()
         }
         override fun receiveKexInit(msg: SshMsgKexinit, initialExchange: Boolean): Boolean {
             actions += "receiveKexInit"
@@ -332,6 +395,7 @@ class SshClientStateMachineTest {
             message: SshMsgChannelRequest,
         ) {
             actions += "sendChannelRequest"
+            channelRequestHook()
         }
         override fun receiveChannelSuccess(recipientChannel: Int) {
             actions += "receiveChannelSuccess"
