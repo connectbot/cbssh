@@ -412,16 +412,16 @@ internal class SftpClientImpl private constructor(
             // Send SSH_FXP_INIT
             val initPayload = ByteBuffer.allocate(4)
             initPayload.putInt(SFTP_VERSION)
-            var initResult: SftpResult<Unit>? = null
-            stateMachine.sendInit {
-                initResult = dispatcher.writeRaw(SSH_FXP_INIT, initPayload.array())
+            val initResult = if (stateMachine.sendInit {}) {
+                dispatcher.writeRaw(SSH_FXP_INIT, initPayload.array())
+            } else {
+                return SftpResult.ProtocolError("Failed to admit SFTP INIT")
             }
             when (val w = initResult) {
                 is SftpResult.Success -> {}
                 is SftpResult.ServerError -> return w
                 is SftpResult.ProtocolError -> return w
                 is SftpResult.IoError -> return w
-                null -> return SftpResult.ProtocolError("Failed to send SFTP INIT")
             }
 
             // Read SSH_FXP_VERSION

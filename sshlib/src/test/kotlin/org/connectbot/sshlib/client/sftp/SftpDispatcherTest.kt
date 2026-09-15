@@ -22,9 +22,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.SftpStatusCode
+import org.connectbot.sshlib.protocol.SftpStateMachine
 import org.junit.jupiter.api.Test
 import java.nio.ByteBuffer
 import kotlin.test.assertContentEquals
@@ -33,6 +35,27 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class SftpDispatcherTest {
+    @Test
+    fun `disconnect does not wait for a suspended request write`() = runTest {
+        val transport = FakePacketTransport()
+        val release = CompletableDeferred<Unit>()
+        transport.writeGate = release
+        val machine = SftpStateMachine()
+        machine.sendInit {}
+        machine.receiveVersion {}
+        val dispatcher = SftpDispatcher(transport, machine)
+        val request = backgroundScope.async {
+            dispatcher.request(5, byteArrayOf()) { action -> machine.readFile { action() } }
+        }
+        transport.awaitWrite()
+        try {
+            assertTrue(withTimeout(1_000) { machine.disconnect {} })
+        } finally {
+            release.complete(Unit)
+            request.cancel()
+            dispatcher.stop()
+        }
+    }
 
     @Test
     fun `request prepends request id and receives matching response`() = runBlocking {
@@ -204,6 +227,7 @@ class SftpDispatcherTest {
         private val firstWrite = CompletableDeferred<Write>()
         val writes = mutableListOf<Write>()
         var writeResult: SftpResult<Unit> = SftpResult.Success(Unit)
+        var writeGate: CompletableDeferred<Unit>? = null
 
         suspend fun awaitWrite(): Write = withTimeout(1_000) {
             while (!firstWrite.isCompleted) {
@@ -229,6 +253,7 @@ class SftpDispatcherTest {
             val write = Write(type, payload)
             writes += write
             firstWrite.complete(write)
+            writeGate?.await()
             return writeResult
         }
     }

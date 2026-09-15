@@ -73,17 +73,27 @@ internal class SftpDispatcher(
         var deferred: CompletableDeferred<SftpRawPacket>? = null
         var writeResult: SftpResult<Unit>? = null
 
-        val authorized = authorize {
-            requestId = nextRequestId.getAndIncrement()
-            deferred = CompletableDeferred<SftpRawPacket>().also { pending[requestId] = it }
-
-            val fullPayload = ByteBuffer.allocate(4 + payload.size)
-            fullPayload.putInt(requestId)
-            fullPayload.put(payload)
-
-            writeResult = writeMutex.withLock {
-                packetIO.writePacket(type, fullPayload.array())
+        // Serialize admission and framing together, but release the lifecycle lock before
+        // transport/window backpressure. A response may arrive before writePacket returns.
+        val authorized = writeMutex.withLock {
+            var admittedPayload: ByteArray? = null
+            val accepted = authorize {
+                requestId = nextRequestId.getAndIncrement()
+                deferred = CompletableDeferred<SftpRawPacket>().also { pending[requestId] = it }
+                val fullPayload = ByteBuffer.allocate(4 + payload.size)
+                fullPayload.putInt(requestId)
+                fullPayload.put(payload)
+                admittedPayload = fullPayload.array()
             }
+            if (accepted) {
+                try {
+                    writeResult = packetIO.writePacket(type, checkNotNull(admittedPayload))
+                } catch (failure: Throwable) {
+                    pending.remove(requestId)
+                    throw failure
+                }
+            }
+            accepted
         }
         if (!authorized) {
             return SftpResult.ProtocolError("SFTP session is not ready")
