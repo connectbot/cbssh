@@ -19,7 +19,6 @@ package org.connectbot.sshlib.client
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import org.connectbot.sshlib.SshException
@@ -37,12 +36,11 @@ internal class AgentChannel(
     private val maxPacketSize: Int,
     remoteWindowSizeInitial: Long,
     initialWindowSize: Int = 64 * 1024,
+    private val lifecycle: SshChannelStateMachine = SshChannelStateMachine(SshChannelState.OPEN),
 ) {
     companion object {
         private val logger = LoggerFactory.getLogger(AgentChannel::class.java)
     }
-
-    private val lifecycle = SshChannelStateMachine(SshChannelState.OPEN)
 
     private val window = LocalChannelWindow(initialWindowSize, remoteInitial = remoteWindowSizeInitial)
     private val windowAvailable = Channel<Unit>(Channel.CONFLATED)
@@ -102,7 +100,7 @@ internal class AgentChannel(
                 }
             }
             requests.close()
-            requestWorker.cancelAndJoin()
+            requestWorker.cancel()
             windowAvailable.close()
             if (SshChannelEffect.CLOSE_CHANNEL in transition.effects) {
                 connection.notifyChannelClosed(localChannelNumber)
@@ -113,7 +111,7 @@ internal class AgentChannel(
     suspend fun onDisconnected() {
         lifecycle.disconnect { transition ->
             requests.close()
-            requestWorker.cancelAndJoin()
+            requestWorker.cancel()
             windowAvailable.close()
             if (SshChannelEffect.CLOSE_CHANNEL in transition.effects) {
                 connection.notifyChannelClosed(localChannelNumber)
@@ -129,9 +127,11 @@ internal class AgentChannel(
             while (window.remoteRemaining <= 0) {
                 windowAvailable.receive()
             }
-            val chunkSize = window.sendChunkSize(data.size - offset, maxPacketSize)
-            val chunk = data.copyOfRange(offset, offset + chunkSize)
+            var chunkSize = 0
             if (!lifecycle.sendData {
+                    chunkSize = window.sendChunkSize(data.size - offset, maxPacketSize)
+                    if (chunkSize == 0) return@sendData
+                    val chunk = data.copyOfRange(offset, offset + chunkSize)
                     connection.sendChannelData(remoteChannelNumber, chunk)
                     window.consumeRemote(chunkSize)
                 }

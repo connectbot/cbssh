@@ -1,7 +1,7 @@
 ---- MODULE SshClientStateMachineGenerated ----
 \* Generated from SshClientStateMachine. Do not edit.
-\* Model SHA-256: f93b71171b62816926e550b59ad72fa55b567872e0ad9aea52e90d72bbc78501
-\* Lifecycle states: 11; transitions: 43.
+\* Model SHA-256: 9f3a37ab3f15fb84322ee552e88e68a003a2525ac8b6f15826b287c101e2b602
+\* Lifecycle states: 12; transitions: 46.
 \* TLC distinct states count full variable valuations, not lifecycle nodes.
 EXTENDS Naturals
 
@@ -14,10 +14,10 @@ VARIABLES state, previousState, history, event, origin, packetWasParsed, effects
 
 vars == <<state, previousState, history, event, origin, packetWasParsed, effects, rekeying, strictKex, nonKexBeforeInitialKexInit, authenticationEstablished, initialNewKeysActive, authRequestPending, previousAuthRequestPending, inboundPacket, lastInboundPacket, inboundTranscriptMatches, inboundHostSignatureValid, inboundTransportValid, hostKeyPossessionVerified, transcriptVerified, transportKeysVerified, lastPacketDisposition, previousChannels, activeChannel, channelEvent, channelOrigin, channels, channelEffects>>
 
-States == {"Authenticated", "Authenticating", "AuthenticationReady", "Disconnected", "Unconnected", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
+States == {"Authenticated", "Authenticating", "AuthenticationReady", "Disconnected", "Unconnected", "WaitHostKey", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
 PostAuthenticatedStates == {"Authenticated", "Authenticating", "AuthenticationReady"}
-KexStates == {"WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys"}
-Events == {"AuthenticationFailure", "AuthenticationSuccess", "AuthorizeAuthenticatedPacket", "AuthorizeAuthenticationPacket", "AuthorizeConnectionPacket", "AuthorizeExtInfo", "BeginAuthentication", "Connect", "Disconnect", "HostilePacketRejected", "OpenChannel", "ReceiveChannelFailure", "ReceiveChannelOpenConfirmation", "ReceiveChannelOpenFailure", "ReceiveChannelSuccess", "ReceiveDebug", "ReceiveGlobalRequest", "ReceiveIgnore", "ReceiveInitialNonStrictKexInit", "ReceiveInitialStrictKexInit", "ReceiveKex.DhGexGroup", "ReceiveKex.DhGexReply", "ReceiveKex.DhReply", "ReceiveKex.EcdhReply", "ReceiveNewKeys", "ReceiveNonKexPacket", "ReceiveRekeyKexInit", "ReceiveServiceAccept", "ReceiveUserauthBanner", "ReceiveUserauthInfoRequest", "ReceiveVersion", "RekeyStarted", "SendChannelRequest", "UnexpectedKexInit"}
+KexStates == {"WaitHostKey", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys"}
+Events == {"AuthenticationFailure", "AuthenticationSuccess", "AuthorizeAuthenticatedPacket", "AuthorizeAuthenticationPacket", "AuthorizeConnectionPacket", "AuthorizeExtInfo", "BeginAuthentication", "Connect", "Disconnect", "HostKeyVerified", "HostilePacketRejected", "OpenChannel", "ReceiveChannelFailure", "ReceiveChannelOpenConfirmation", "ReceiveChannelOpenFailure", "ReceiveChannelSuccess", "ReceiveDebug", "ReceiveGlobalRequest", "ReceiveIgnore", "ReceiveInitialNonStrictKexInit", "ReceiveInitialStrictKexInit", "ReceiveKex.DhGexGroup", "ReceiveKex.DhGexReply", "ReceiveKex.DhReply", "ReceiveKex.EcdhReply", "ReceiveNewKeys", "ReceiveNonKexPacket", "ReceiveRekeyKexInit", "ReceiveServiceAccept", "ReceiveUserauthBanner", "ReceiveUserauthInfoRequest", "ReceiveVersion", "RekeyStarted", "SendChannelRequest", "UnexpectedKexInit"}
 Origins == {"Internal", "LocalCommand", "ParsedPacket", "Timer"}
 Effects == {"ActivateEncryption", "ActivateInboundProtection", "ActivateOutboundProtection", "AuthenticationFailure", "AuthenticationSuccess", "ClearNonKexBeforeInitialKexInit", "Debug", "Disconnect", "EnableStrictKex", "Ignore", "NegotiateNonStrictKex", "ReceiveChannelFailure", "ReceiveChannelOpenConfirmation", "ReceiveChannelOpenFailure", "ReceiveChannelSuccess", "ReceiveGlobalRequest", "ReceiveKexDhGexReply", "ReceiveKexDhReply", "ReceiveKexEcdhReply", "ReceiveKexInit", "ReceiveNewKeys", "ReceiveServiceAccept", "ReceiveUserauthBanner", "ReceiveUserauthInfoRequest", "ReceiveVersion", "RecordNonKexBeforeInitialKexInit", "RekeyComplete", "RekeyStarted", "ResetInboundSequence", "ResetOutboundSequence", "SendChannelOpen", "SendChannelRequest", "SendClientExtInfo", "SendKexDhGexInit", "SendKexExchangeInit", "SendKexInit", "SendNewKeys", "SendProtocolError", "SendServiceRequest", "SendUnimplemented", "SendUserauthRequest", "SendVersion", "StartAuthentication", "VerifyHostKeyPossession", "VerifyKexTranscript"}
 PacketClasses == {"ChannelOpenReply", "ChannelRequestReply", "ClientConnectionPacket", "ClientKexInit", "ClientServiceRequest", "ClientUserauthRequest", "ConnectionPacket", "Debug", "Disconnect", "ExtInfo", "GlobalRequest", "Ignore", "KexGexGroup", "KexInit", "KexReply", "NewKeys", "ServiceAccept", "Unknown", "UserauthBanner", "UserauthFailure", "UserauthMethodSpecific", "UserauthSuccess"}
@@ -539,7 +539,7 @@ CONNECT ==
     /\ channelEffects' = {}
 
 DISCONNECT ==
-    /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
+    /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitHostKey", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
     /\ (inboundPacket = "None"
         \/ /\ inboundPacket \in {"Disconnect"}
               /\ (~initialNewKeysActive \/ inboundTransportValid)
@@ -572,6 +572,38 @@ DISCONNECT ==
     /\ channelEvent' = "None"
     /\ channelOrigin' = "None"
     /\ channels' = [c \in ChannelIDs |-> IF channels[c] = "Unallocated" THEN "Unallocated" ELSE "CLOSED"]
+    /\ channelEffects' = {}
+
+HOST_KEY_VERIFIED ==
+    /\ state \in {"WaitHostKey"}
+    /\ state' = "WaitNewKeys"
+    /\ previousState' = state
+    /\ history' = history
+    /\ event' = "HostKeyVerified"
+    /\ origin' = "Internal"
+    /\ packetWasParsed' = (origin' = "ParsedPacket")
+    /\ effects' = IF strictKex THEN {"ActivateOutboundProtection", "ResetOutboundSequence", "SendNewKeys"} ELSE {"ActivateOutboundProtection", "SendNewKeys"}
+    /\ rekeying' = rekeying
+    /\ strictKex' = strictKex
+    /\ nonKexBeforeInitialKexInit' = nonKexBeforeInitialKexInit
+    /\ authenticationEstablished' = authenticationEstablished
+    /\ initialNewKeysActive' = initialNewKeysActive
+    /\ authRequestPending' = authRequestPending
+    /\ previousAuthRequestPending' = authRequestPending
+    /\ inboundPacket' = inboundPacket
+    /\ lastInboundPacket' = lastInboundPacket
+    /\ inboundTranscriptMatches' = inboundTranscriptMatches
+    /\ inboundHostSignatureValid' = inboundHostSignatureValid
+    /\ inboundTransportValid' = inboundTransportValid
+    /\ hostKeyPossessionVerified' = hostKeyPossessionVerified
+    /\ transcriptVerified' = transcriptVerified
+    /\ transportKeysVerified' = transportKeysVerified
+    /\ lastPacketDisposition' = "Client"
+    /\ previousChannels' = channels
+    /\ activeChannel' = 0
+    /\ channelEvent' = "None"
+    /\ channelOrigin' = "None"
+    /\ channels' = channels
     /\ channelEffects' = {}
 
 OPEN_CHANNEL ==
@@ -751,7 +783,7 @@ RECEIVE_CHANNEL_SUCCESS ==
     /\ channelEffects' = {}
 
 RECEIVE_DEBUG ==
-    /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
+    /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitHostKey", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
     /\ (inboundPacket = "None"
         \/ /\ inboundPacket \in {"Debug"}
               /\ (~initialNewKeysActive \/ inboundTransportValid)
@@ -823,7 +855,7 @@ RECEIVE_GLOBAL_REQUEST ==
     /\ channelEffects' = {}
 
 RECEIVE_IGNORE ==
-    /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
+    /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitHostKey", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
     /\ (inboundPacket = "None"
         \/ /\ inboundPacket \in {"Ignore"}
               /\ (~initialNewKeysActive \/ inboundTransportValid)
@@ -1015,13 +1047,13 @@ RECEIVE_KEX_DH_GEX_REPLY ==
               /\ (~EnforceKexProofVerification \/ inboundTranscriptMatches)
               /\ (~initialNewKeysActive \/ inboundTransportValid)
        )
-    /\ state' = "WaitNewKeys"
+    /\ state' = "WaitHostKey"
     /\ previousState' = state
     /\ history' = history
     /\ event' = "ReceiveKex.DhGexReply"
     /\ origin' = "ParsedPacket"
     /\ packetWasParsed' = (origin' = "ParsedPacket")
-    /\ effects' = IF strictKex THEN {"ActivateOutboundProtection", "ReceiveKexDhGexReply", "ResetOutboundSequence", "SendNewKeys", "VerifyHostKeyPossession", "VerifyKexTranscript"} ELSE {"ActivateOutboundProtection", "ReceiveKexDhGexReply", "SendNewKeys", "VerifyHostKeyPossession", "VerifyKexTranscript"}
+    /\ effects' = {"ReceiveKexDhGexReply", "VerifyHostKeyPossession", "VerifyKexTranscript"}
     /\ rekeying' = rekeying
     /\ strictKex' = strictKex
     /\ nonKexBeforeInitialKexInit' = nonKexBeforeInitialKexInit
@@ -1053,13 +1085,13 @@ RECEIVE_KEX_DH_REPLY ==
               /\ (~EnforceKexProofVerification \/ inboundTranscriptMatches)
               /\ (~initialNewKeysActive \/ inboundTransportValid)
        )
-    /\ state' = "WaitNewKeys"
+    /\ state' = "WaitHostKey"
     /\ previousState' = state
     /\ history' = history
     /\ event' = "ReceiveKex.DhReply"
     /\ origin' = "ParsedPacket"
     /\ packetWasParsed' = (origin' = "ParsedPacket")
-    /\ effects' = IF strictKex THEN {"ActivateOutboundProtection", "ReceiveKexDhReply", "ResetOutboundSequence", "SendNewKeys", "VerifyHostKeyPossession", "VerifyKexTranscript"} ELSE {"ActivateOutboundProtection", "ReceiveKexDhReply", "SendNewKeys", "VerifyHostKeyPossession", "VerifyKexTranscript"}
+    /\ effects' = {"ReceiveKexDhReply", "VerifyHostKeyPossession", "VerifyKexTranscript"}
     /\ rekeying' = rekeying
     /\ strictKex' = strictKex
     /\ nonKexBeforeInitialKexInit' = nonKexBeforeInitialKexInit
@@ -1091,13 +1123,13 @@ RECEIVE_KEX_ECDH_REPLY ==
               /\ (~EnforceKexProofVerification \/ inboundTranscriptMatches)
               /\ (~initialNewKeysActive \/ inboundTransportValid)
        )
-    /\ state' = "WaitNewKeys"
+    /\ state' = "WaitHostKey"
     /\ previousState' = state
     /\ history' = history
     /\ event' = "ReceiveKex.EcdhReply"
     /\ origin' = "ParsedPacket"
     /\ packetWasParsed' = (origin' = "ParsedPacket")
-    /\ effects' = IF strictKex THEN {"ActivateOutboundProtection", "ReceiveKexEcdhReply", "ResetOutboundSequence", "SendNewKeys", "VerifyHostKeyPossession", "VerifyKexTranscript"} ELSE {"ActivateOutboundProtection", "ReceiveKexEcdhReply", "SendNewKeys", "VerifyHostKeyPossession", "VerifyKexTranscript"}
+    /\ effects' = {"ReceiveKexEcdhReply", "VerifyHostKeyPossession", "VerifyKexTranscript"}
     /\ rekeying' = rekeying
     /\ strictKex' = strictKex
     /\ nonKexBeforeInitialKexInit' = nonKexBeforeInitialKexInit
@@ -1406,6 +1438,39 @@ RECORD_NON_KEX_BEFORE_INITIAL_KEX_INIT ==
     /\ channels' = channels
     /\ channelEffects' = {}
 
+REJECT_NON_KEX_WAIT_HOST_KEY ==
+    /\ state \in {"WaitHostKey"}
+    /\ (strictKex) /\ (~(rekeying))
+    /\ state' = "Disconnected"
+    /\ previousState' = state
+    /\ history' = history
+    /\ event' = "ReceiveNonKexPacket"
+    /\ origin' = "ParsedPacket"
+    /\ packetWasParsed' = (origin' = "ParsedPacket")
+    /\ effects' = {"Disconnect", "SendProtocolError"}
+    /\ rekeying' = FALSE
+    /\ strictKex' = strictKex
+    /\ nonKexBeforeInitialKexInit' = nonKexBeforeInitialKexInit
+    /\ authenticationEstablished' = authenticationEstablished
+    /\ initialNewKeysActive' = initialNewKeysActive
+    /\ authRequestPending' = FALSE
+    /\ previousAuthRequestPending' = authRequestPending
+    /\ inboundPacket' = inboundPacket
+    /\ lastInboundPacket' = lastInboundPacket
+    /\ inboundTranscriptMatches' = inboundTranscriptMatches
+    /\ inboundHostSignatureValid' = inboundHostSignatureValid
+    /\ inboundTransportValid' = inboundTransportValid
+    /\ hostKeyPossessionVerified' = FALSE
+    /\ transcriptVerified' = FALSE
+    /\ transportKeysVerified' = FALSE
+    /\ lastPacketDisposition' = "Client"
+    /\ previousChannels' = channels
+    /\ activeChannel' = 0
+    /\ channelEvent' = "None"
+    /\ channelOrigin' = "None"
+    /\ channels' = [c \in ChannelIDs |-> IF channels[c] = "Unallocated" THEN "Unallocated" ELSE "CLOSED"]
+    /\ channelEffects' = {}
+
 REJECT_NON_KEX_WAIT_KEX ==
     /\ state \in {"WaitKex"}
     /\ (strictKex) /\ (~(rekeying))
@@ -1639,6 +1704,42 @@ SEND_CHANNEL_REQUEST ==
     /\ channels' = [channels EXCEPT ![activeChannel'] = ChannelTransitionTarget(channels[activeChannel'], "SendRequest")]
     /\ channelEffects' = ChannelEffectsFor(channels[activeChannel'], "SendRequest")
 
+UNEXPECTED_KEX_INIT_WAIT_HOST_KEY ==
+    /\ state \in {"WaitHostKey"}
+    /\ (inboundPacket = "None"
+        \/ /\ inboundPacket \in {"KexInit"}
+              /\ (~initialNewKeysActive \/ inboundTransportValid)
+       )
+    /\ state' = "Disconnected"
+    /\ previousState' = state
+    /\ history' = history
+    /\ event' = "UnexpectedKexInit"
+    /\ origin' = "ParsedPacket"
+    /\ packetWasParsed' = (origin' = "ParsedPacket")
+    /\ effects' = {"Disconnect", "SendProtocolError"}
+    /\ rekeying' = FALSE
+    /\ strictKex' = strictKex
+    /\ nonKexBeforeInitialKexInit' = nonKexBeforeInitialKexInit
+    /\ authenticationEstablished' = authenticationEstablished
+    /\ initialNewKeysActive' = initialNewKeysActive
+    /\ authRequestPending' = FALSE
+    /\ previousAuthRequestPending' = authRequestPending
+    /\ inboundPacket' = "None"
+    /\ lastInboundPacket' = inboundPacket
+    /\ inboundTranscriptMatches' = inboundTranscriptMatches
+    /\ inboundHostSignatureValid' = inboundHostSignatureValid
+    /\ inboundTransportValid' = inboundTransportValid
+    /\ hostKeyPossessionVerified' = FALSE
+    /\ transcriptVerified' = FALSE
+    /\ transportKeysVerified' = FALSE
+    /\ lastPacketDisposition' = IF inboundPacket = "None" THEN "Client" ELSE "Accepted"
+    /\ previousChannels' = channels
+    /\ activeChannel' = 0
+    /\ channelEvent' = "None"
+    /\ channelOrigin' = "None"
+    /\ channels' = [c \in ChannelIDs |-> IF channels[c] = "Unallocated" THEN "Unallocated" ELSE "CLOSED"]
+    /\ channelEffects' = {}
+
 UNEXPECTED_KEX_INIT_WAIT_KEX ==
     /\ state \in {"WaitKex"}
     /\ (inboundPacket = "None"
@@ -1769,7 +1870,7 @@ PacketTransitionEnabled ==
     \/ /\ state \in {"WaitService"}
        /\ inboundPacket \in {"ExtInfo"}
        /\ inboundTransportValid
-    \/ /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
+    \/ /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitHostKey", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
        /\ inboundPacket \in {"Disconnect"}
        /\ (~initialNewKeysActive \/ inboundTransportValid)
     \/ /\ state \in {"Authenticated"}
@@ -1784,13 +1885,13 @@ PacketTransitionEnabled ==
     \/ /\ state \in {"Authenticated"}
        /\ inboundPacket \in {"ChannelRequestReply"}
        /\ inboundTransportValid
-    \/ /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
+    \/ /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitHostKey", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
        /\ inboundPacket \in {"Debug"}
        /\ (~initialNewKeysActive \/ inboundTransportValid)
     \/ /\ state \in {"Authenticated"}
        /\ inboundPacket \in {"GlobalRequest"}
        /\ inboundTransportValid
-    \/ /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
+    \/ /\ state \in {"Authenticated", "Authenticating", "AuthenticationReady", "Unconnected", "WaitHostKey", "WaitKex", "WaitKexDhGexInit", "WaitKexInit", "WaitNewKeys", "WaitService", "WaitVersion"}
        /\ inboundPacket \in {"Ignore"}
        /\ (~initialNewKeysActive \/ inboundTransportValid)
     \/ /\ state \in {"WaitNewKeys"}
@@ -1851,6 +1952,9 @@ PacketTransitionEnabled ==
        /\ inboundPacket \in {"KexInit"}
        /\ (~(rekeying)) /\ (nonKexBeforeInitialKexInit)
        /\ (~initialNewKeysActive \/ inboundTransportValid)
+    \/ /\ state \in {"WaitHostKey"}
+       /\ inboundPacket \in {"KexInit"}
+       /\ (~initialNewKeysActive \/ inboundTransportValid)
     \/ /\ state \in {"WaitKex"}
        /\ inboundPacket \in {"KexInit"}
        /\ (~initialNewKeysActive \/ inboundTransportValid)
@@ -1865,7 +1969,7 @@ HostilePacketFatal ==
     \/ /\ strictKex /\ ~rekeying /\ state \in KexStates
        /\ ~PacketTransitionEnabled
     \/ /\ inboundPacket = "KexInit"
-       /\ state \in {"WaitKex", "WaitKexDhGexInit", "WaitNewKeys"}
+       /\ state \in {"WaitKex", "WaitKexDhGexInit", "WaitHostKey", "WaitNewKeys"}
     \/ /\ inboundPacket = "KexReply"
        /\ (~inboundHostSignatureValid \/ ~inboundTranscriptMatches)
     \/ /\ initialNewKeysActive /\ ~inboundTransportValid
@@ -1925,6 +2029,7 @@ ClientNext ==
     \/ BEGIN_AUTHENTICATION
     \/ CONNECT
     \/ DISCONNECT
+    \/ HOST_KEY_VERIFIED
     \/ OPEN_CHANNEL
     \/ RECEIVE_CHANNEL_FAILURE
     \/ RECEIVE_CHANNEL_OPEN_CONFIRMATION
@@ -1948,6 +2053,7 @@ ClientNext ==
     \/ RECEIVE_USERAUTH_INFO_REQUEST
     \/ RECEIVE_VERSION
     \/ RECORD_NON_KEX_BEFORE_INITIAL_KEX_INIT
+    \/ REJECT_NON_KEX_WAIT_HOST_KEY
     \/ REJECT_NON_KEX_WAIT_KEX
     \/ REJECT_NON_KEX_WAIT_KEX_DH_GEX_INIT
     \/ REJECT_NON_KEX_WAIT_NEW_KEYS
@@ -1955,6 +2061,7 @@ ClientNext ==
     \/ REKEY_STARTED
     \/ REPEAT_BEGIN_AUTHENTICATION
     \/ SEND_CHANNEL_REQUEST
+    \/ UNEXPECTED_KEX_INIT_WAIT_HOST_KEY
     \/ UNEXPECTED_KEX_INIT_WAIT_KEX
     \/ UNEXPECTED_KEX_INIT_WAIT_KEX_DH_GEX_INIT
     \/ UNEXPECTED_KEX_INIT_WAIT_NEW_KEYS

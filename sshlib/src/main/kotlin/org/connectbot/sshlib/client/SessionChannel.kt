@@ -83,7 +83,10 @@ class SessionChannel internal constructor(
         deliverData(extendedDataIngress, _extendedData) { it.second.size }
     }
 
-    override val isOpen: Boolean get() = lifecycle.isOpen
+    // AutoCloseable.close() cannot await the owner. Publish the local API close request
+    // immediately; packet authorization remains exclusively in the lifecycle machine.
+    @Volatile private var closeRequested = false
+    override val isOpen: Boolean get() = !closeRequested && lifecycle.isOpen
     override val remoteChannelNumber: Int get() = _remoteChannelNumber
     override val stdout: ReceiveChannel<ByteArray> get() = _stdout
     override val stderr: ReceiveChannel<ByteArray> get() = _stderr
@@ -264,9 +267,11 @@ class SessionChannel internal constructor(
             while (window.remoteRemaining <= 0) {
                 windowAvailable.receive()
             }
-            val chunkSize = window.sendChunkSize(data.size - offset, maxPacketSize)
-            val chunk = data.copyOfRange(offset, offset + chunkSize)
+            var chunkSize = 0
             if (!lifecycle.sendData {
+                    chunkSize = window.sendChunkSize(data.size - offset, maxPacketSize)
+                    if (chunkSize == 0) return@sendData
+                    val chunk = data.copyOfRange(offset, offset + chunkSize)
                     connection.sendChannelData(_remoteChannelNumber, chunk)
                     window.consumeRemote(chunkSize)
                 }
@@ -475,22 +480,27 @@ class SessionChannel internal constructor(
     }
 
     override fun close() {
+        closeRequested = true
         connectionScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            lifecycle.sendClose { transition ->
-                logger.debug("Closing channel $localChannelNumber")
-                obfuscatorMutex.withLock { obfuscator?.stop() }
-                chaffJob?.cancel()
-                abortInboundDelivery()
-                windowAvailable.close()
-                _exitInfo.complete(null)
-                try {
-                    connection.sendChannelClose(_remoteChannelNumber)
-                } catch (e: Exception) {
-                    logger.debug("Failed to send CHANNEL_CLOSE", e)
+            try {
+                lifecycle.sendClose { transition ->
+                    logger.debug("Closing channel $localChannelNumber")
+                    obfuscatorMutex.withLock { obfuscator?.stop() }
+                    chaffJob?.cancel()
+                    abortInboundDelivery()
+                    windowAvailable.close()
+                    _exitInfo.complete(null)
+                    try {
+                        connection.sendChannelClose(_remoteChannelNumber)
+                    } catch (e: Exception) {
+                        logger.debug("Failed to send CHANNEL_CLOSE", e)
+                    }
+                    if (SshChannelEffect.CLOSE_CHANNEL in transition.effects) {
+                        connection.notifyChannelClosed(localChannelNumber)
+                    }
                 }
-                if (SshChannelEffect.CLOSE_CHANNEL in transition.effects) {
-                    connection.notifyChannelClosed(localChannelNumber)
-                }
+            } catch (e: Exception) {
+                logger.debug("Channel close ended with the connection", e)
             }
             // A remote CLOSE makes sendClose a no-op, but close() still owns
             // releasing any unread delivery job retained for graceful draining.

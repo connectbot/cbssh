@@ -151,9 +151,11 @@ internal class ForwardingChannel(
             while (window.remoteRemaining <= 0) {
                 windowAvailable.receive()
             }
-            val chunkSize = window.sendChunkSize(data.size - offset, maxPacketSize)
-            val chunk = data.copyOfRange(offset, offset + chunkSize)
+            var chunkSize = 0
             if (!lifecycle.sendData {
+                    chunkSize = window.sendChunkSize(data.size - offset, maxPacketSize)
+                    if (chunkSize == 0) return@sendData
+                    val chunk = data.copyOfRange(offset, offset + chunkSize)
                     connection.sendChannelData(remoteChannelNumber, chunk)
                     window.consumeRemote(chunkSize)
                 }

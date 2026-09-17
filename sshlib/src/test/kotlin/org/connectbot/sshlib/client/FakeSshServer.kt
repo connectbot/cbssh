@@ -121,6 +121,9 @@ class FakeSshServer(
     private val receivedChannelData = Channel<SshMsgChannelData>(Channel.UNLIMITED)
     private val receivedChannelWindowAdjusts = Channel<SshMsgChannelWindowAdjust>(Channel.UNLIMITED)
     private val receivedUnimplemented = Channel<SshMsgUnimplemented>(Channel.UNLIMITED)
+    private val receivedClosingPackets = Channel<SshEnums.MessageType>(Channel.UNLIMITED)
+
+    suspend fun awaitClosingPacket(): SshEnums.MessageType = receivedClosingPackets.receive()
 
     fun start(ignoreTransportErrors: Boolean = false) {
         scope.launch(coroutineContext) {
@@ -221,7 +224,12 @@ class FakeSshServer(
                         SshEnums.MessageType.SSH_MSG_KEXINIT ->
                             doClientInitiatedKex(serverIo, rawBytes, incomingPackets)
 
-                        SshEnums.MessageType.SSH_MSG_DISCONNECT -> return@onReceiveCatching true
+                        SshEnums.MessageType.SSH_MSG_DISCONNECT -> {
+                            receivedClosingPackets.trySend(msgType)
+                            return@onReceiveCatching true
+                        }
+
+                        SshEnums.MessageType.SSH_MSG_CHANNEL_CLOSE -> receivedClosingPackets.trySend(msgType)
 
                         SshEnums.MessageType.SSH_MSG_EXT_INFO -> {
                             val bodyBytes = rawBytes.copyOfRange(1, rawBytes.size)

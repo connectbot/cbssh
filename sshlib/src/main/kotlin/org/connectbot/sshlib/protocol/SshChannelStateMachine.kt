@@ -19,6 +19,7 @@ package org.connectbot.sshlib.protocol
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.connectbot.sshlib.client.ProtocolExecutor
 import ru.nsk.kstatemachine.event.Event
 import ru.nsk.kstatemachine.metainfo.MetaInfo
 import ru.nsk.kstatemachine.state.IState
@@ -224,6 +225,8 @@ internal data class SshChannelFormalModel(
  */
 internal class SshChannelStateMachine(
     initialState: SshChannelState,
+    private val owner: ProtocolExecutor? = null,
+    private val readyForLocalCommand: () -> Boolean = { true },
 ) {
     init {
         require(initialState == SshChannelState.OPENING || initialState == SshChannelState.OPEN) {
@@ -499,8 +502,13 @@ internal class SshChannelStateMachine(
         )
     }
 
-    private suspend fun process(event: ChannelEvent): Boolean = eventMutex.withLock {
-        stateMachine.processEvent(event) == ProcessingResult.PROCESSED
+    private suspend fun process(event: ChannelEvent): Boolean {
+        suspend fun accept(): Boolean = eventMutex.withLock {
+            stateMachine.processEvent(event) == ProcessingResult.PROCESSED
+        }
+        return owner?.run(ready = { event.origin != SshChannelEventOrigin.LOCAL_COMMAND || readyForLocalCommand() }) {
+            accept()
+        } ?: deferIo { accept() }
     }
 
     private fun bindState(state: IState, lifecycleState: SshChannelState) {

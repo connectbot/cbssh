@@ -28,6 +28,24 @@ import kotlin.test.assertTrue
 
 class SshClientStateMachineTest {
     @Test
+    fun `host key completion is required before NEWKEYS and cannot be replayed`() = runTest {
+        val callbacks = RecordingCallbacks()
+        val machine = SshClientStateMachine(callbacks)
+        assertFalse(machine.hostKeyVerified())
+        assertTrue(machine.connect())
+        assertTrue(machine.receiveVersion(IdBanner()))
+        assertTrue(machine.receiveKexInit(SshMsgKexinit()))
+        assertTrue(machine.receiveKexEcdhReply(SshMsgKexEcdhReply()))
+        assertFalse("sendNewKeys" in callbacks.actions)
+        assertFalse(machine.receiveNewKeys())
+        assertFalse(machine.authorizeAuthenticatedPacket())
+        assertTrue(machine.hostKeyVerified())
+        assertFalse(machine.hostKeyVerified())
+        assertEquals(1, callbacks.actions.count { it == "sendNewKeys" })
+        assertTrue(machine.receiveNewKeys())
+    }
+
+    @Test
     fun `authorization waits for a suspended valid transition`() = runTest {
         val callbacks = RecordingCallbacks()
         val machine = authenticatedMachine(callbacks)
@@ -94,6 +112,7 @@ class SshClientStateMachineTest {
         assertTrue(machine.receiveVersion(IdBanner()))
         assertTrue(machine.receiveKexInit(SshMsgKexinit()))
         assertTrue(machine.receiveKexDhReply(SshMsgKexdhReply()))
+        assertTrue(machine.hostKeyVerified())
         assertTrue(machine.receiveNewKeys())
         assertTrue(machine.receiveServiceAccept("ssh-userauth"))
 
@@ -118,6 +137,7 @@ class SshClientStateMachineTest {
         assertTrue(machine.receiveVersion(IdBanner()))
         assertTrue(machine.receiveKexInit(SshMsgKexinit()))
         assertTrue(machine.receiveKexDhReply(SshMsgKexdhReply()))
+        assertTrue(machine.hostKeyVerified())
         assertTrue(machine.receiveNewKeys())
         assertTrue(machine.receiveServiceAccept("ssh-userauth"))
 
@@ -136,6 +156,7 @@ class SshClientStateMachineTest {
         assertTrue(machine.receiveVersion(IdBanner()))
         assertTrue(machine.receiveKexInit(SshMsgKexinit()))
         assertTrue(machine.receiveKexEcdhReply(SshMsgKexEcdhReply()))
+        assertTrue(machine.hostKeyVerified())
         assertTrue(machine.receiveNewKeys())
         assertTrue(machine.receiveServiceAccept("ssh-userauth"))
         assertTrue(machine.beginAuthentication())
@@ -145,6 +166,7 @@ class SshClientStateMachineTest {
         assertTrue(callbacks.rekeying)
         assertTrue(machine.receiveKexInit(SshMsgKexinit()))
         assertTrue(machine.receiveKexEcdhReply(SshMsgKexEcdhReply()))
+        assertTrue(machine.hostKeyVerified())
         assertTrue(machine.receiveNewKeys())
 
         assertFalse(callbacks.rekeying)
@@ -160,6 +182,7 @@ class SshClientStateMachineTest {
         assertTrue(machine.receiveVersion(IdBanner()))
         assertTrue(machine.receiveKexInit(SshMsgKexinit()))
         assertTrue(machine.receiveKexEcdhReply(SshMsgKexEcdhReply()))
+        assertTrue(machine.hostKeyVerified())
         assertTrue(machine.receiveNewKeys())
         assertTrue(machine.receiveServiceAccept("ssh-userauth"))
         assertTrue(machine.beginAuthentication())
@@ -169,6 +192,7 @@ class SshClientStateMachineTest {
         assertTrue(machine.requestRekey())
         assertTrue(machine.receiveKexInit(SshMsgKexinit()))
         assertTrue(machine.receiveKexEcdhReply(SshMsgKexEcdhReply()))
+        assertTrue(machine.hostKeyVerified())
         assertTrue(machine.receiveNewKeys())
 
         assertTrue(machine.isStrictKexEnabled())
@@ -230,6 +254,7 @@ class SshClientStateMachineTest {
         assertTrue(machine.receiveVersion(IdBanner()))
         assertTrue(machine.receiveKexInit(SshMsgKexinit()))
         assertTrue(machine.receiveKexEcdhReply(SshMsgKexEcdhReply()))
+        assertTrue(machine.hostKeyVerified())
         assertTrue(machine.receiveNewKeys())
         assertTrue(machine.receiveServiceAccept("ssh-userauth"))
         assertTrue(machine.beginAuthentication())
@@ -271,6 +296,7 @@ class SshClientStateMachineTest {
         assertTrue(machine.receiveVersion(IdBanner()))
         assertTrue(machine.receiveKexInit(SshMsgKexinit()))
         assertTrue(machine.receiveKexDhReply(SshMsgKexdhReply()))
+        assertTrue(machine.hostKeyVerified())
         assertTrue(machine.receiveNewKeys())
         assertTrue(machine.receiveServiceAccept("ssh-userauth"))
     }

@@ -25,6 +25,7 @@ import kotlinx.coroutines.CloseableCoroutineDispatcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -32,6 +33,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
@@ -350,8 +352,10 @@ class SshConnection(
     private val stateMachine = SshClientStateMachine(callbacks)
     private val inboundPacketController = InboundPacketController()
     internal val connectionScope = CoroutineScope(SupervisorJob() + coroutineDispatcher)
-    private val writeMutex = Mutex()
-    private val outboundPacketController = OutboundPacketController()
+    private val protocolScope = CoroutineScope(SupervisorJob() + stateMachineDispatcher)
+    internal val protocolExecutor = ProtocolExecutor(protocolScope, stateMachineDispatcher)
+    private val outboundPacketController = PacketWriter(connectionScope, stateMachineDispatcher, packetIO, ::writerFailed)
+    private val closeMutex = Mutex()
     private var transportClosing = false
 
     private val _disconnectedFlow = MutableSharedFlow<Throwable?>(extraBufferCapacity = 1)
@@ -398,7 +402,6 @@ class SshConnection(
         val sentTimeNs: Long? = null,
     )
     private val pendingPings = HashMap<Long, PendingPing>()
-    private val pendingPingQueue = ArrayDeque<suspend () -> Unit>()
 
     /**
      * Helper to manage a pending asynchronous operation that waits for a server response.
@@ -409,7 +412,7 @@ class SshConnection(
         private var deferred: CompletableDeferred<T>? = null
 
         suspend fun set(value: CompletableDeferred<T>) {
-            withContext(stateMachineDispatcher) {
+            protocolExecutor.run {
                 check(deferred == null) { "Operation already has a pending reply" }
                 deferred = value
             }
@@ -446,7 +449,9 @@ class SshConnection(
         }
 
         suspend fun clearIfSame(expected: CompletableDeferred<T>) {
-            withContext(stateMachineDispatcher) {
+            // An admitted request still owns its reply slot after caller cancellation.
+            if (!expected.isCompleted || protocolExecutor.isClosed) return
+            protocolExecutor.run {
                 if (deferred === expected) {
                     deferred = null
                 }
@@ -481,15 +486,20 @@ class SshConnection(
 
     @Volatile private var pendingConnect: CompletableDeferred<ConnectResult>? = null
     private var dhGexGroup: SshMsgKexDhGexGroup? = null
+    private var pendingHostVerification: Deferred<Unit>? = null
     private var pendingProtection: PendingProtection? = null
     private var pendingSendCompressor: PacketCompressor? = null
     private var pendingReceiveCompressor: PacketCompressor? = null
     private var pendingCompressionImmediate = false
 
+    private fun localCommandsReady(): Boolean = !stateMachine.isKexInProgress() && !inboundPacketController.hasBufferedPackets
+
+    internal fun newChannelStateMachine(initial: SshChannelState): SshChannelStateMachine = SshChannelStateMachine(initial, protocolExecutor, ::localCommandsReady)
+
     private suspend fun dispatchCommand(name: String, command: suspend SshClientStateMachine.() -> Boolean) {
         logger.debug("Dispatching command: $name")
         try {
-            withContext(stateMachineDispatcher) {
+            protocolExecutor.run(ready = { !inboundPacketController.hasBufferedPackets }) {
                 check(stateMachine.command()) { "Command $name is not valid in the current SSH state" }
             }
         } catch (e: Exception) {
@@ -503,64 +513,25 @@ class SshConnection(
         outboundPacketController.writePacket(messageType, payload)
     }
 
-    private inner class OutboundPacketController {
-        @Volatile
-        private var kexCompletion = CompletableDeferred(Unit)
-
-        fun beginKex() {
-            check(kexCompletion.isCompleted) { "Key exchange is already in progress" }
-            kexCompletion = CompletableDeferred()
-        }
-
-        fun completeKex() {
-            kexCompletion.complete(Unit)
-        }
-
-        suspend fun writePacket(
-            messageType: Int,
-            payload: ByteArray = byteArrayOf(),
-            beforeWrite: () -> Unit = {},
-            afterWrite: () -> Unit = {},
-        ) {
-            while (true) {
-                val observedKex = kexCompletion
-                if (!isAllowedDuringKex(messageType)) {
-                    observedKex.await()
-                }
-
-                var written = false
-                writeMutex.withLock {
-                    checkTransportOpen()
-                    if (isAllowedDuringKex(messageType) || kexCompletion.isCompleted) {
-                        beforeWrite()
-                        packetIO.writePacket(messageType, payload)
-                        afterWrite()
-                        written = true
-                    }
-                }
-                if (written) return
-            }
-        }
-
-        private fun isAllowedDuringKex(messageType: Int): Boolean = messageType in 1..4 || messageType in 7..49
-    }
-
-    private fun checkTransportOpen() {
-        if (transportClosing) {
-            throw TransportException("Transport is closed")
+    private suspend fun writerFailed(failure: Throwable) {
+        if (transportClosing || !connectionScope.isActive) return
+        protocolScope.launch {
+            _disconnectedFlow.tryEmit(failure)
+            closeTransport()
+            packetLoopJob?.cancel()
         }
     }
 
     /** Prevent new writes before closing the underlying transport exactly once. */
     private suspend fun closeTransport() {
         withContext(NonCancellable) {
-            writeMutex.withLock {
+            closeMutex.withLock {
                 if (transportClosing) return@withLock
                 transportClosing = true
                 try {
                     transport.close()
                 } finally {
-                    outboundPacketController.completeKex()
+                    outboundPacketController.close()
                 }
             }
         }
@@ -579,8 +550,15 @@ class SshConnection(
             dispatchCommand("Connect") { connect() }
 
             // Version exchange — text protocol, handled inline
-            packetIO.writeBanner(clientVersion)
-            val banner = packetIO.readBanner()
+            val handshake = connectionScope.async {
+                packetIO.writeBanner(clientVersion)
+                packetIO.readBanner()
+            }
+            val banner = try {
+                handshake.await()
+            } finally {
+                handshake.cancel()
+            }
             dispatchCommand("ReceiveVersion") { receiveVersion(banner) }
 
             // Start packet loop — handles all binary SSH packets from here
@@ -634,13 +612,14 @@ class SshConnection(
             }
 
             val deferred = CompletableDeferred<Boolean>()
-            dispatchCommand("BeginPasswordAuthentication") { beginAuthentication() }
-            pendingAuth.set(deferred)
-
-            writePacket(
-                SshEnums.MessageType.SSH_MSG_USERAUTH_REQUEST.id().toInt(),
-                req.toByteArray(),
-            )
+            protocolExecutor.run(ready = ::localCommandsReady) {
+                check(stateMachine.beginAuthentication())
+                pendingAuth.setDirect(deferred)
+                writePacket(
+                    SshEnums.MessageType.SSH_MSG_USERAUTH_REQUEST.id().toInt(),
+                    req.toByteArray(),
+                )
+            }
 
             try {
                 val success = deferred.await()
@@ -685,16 +664,15 @@ class SshConnection(
 
             val deferred = CompletableDeferred<Boolean>()
             val channel = Channel<SshMsgUserauthInfoRequest>(Channel.UNLIMITED)
-            dispatchCommand("BeginKeyboardInteractiveAuthentication") { beginAuthentication() }
-            pendingAuth.set(deferred)
-            withContext(stateMachineDispatcher) {
+            protocolExecutor.run(ready = ::localCommandsReady) {
+                check(stateMachine.beginAuthentication())
+                pendingAuth.setDirect(deferred)
                 infoRequestChannel = channel
+                writePacket(
+                    SshEnums.MessageType.SSH_MSG_USERAUTH_REQUEST.id().toInt(),
+                    req.toByteArray(),
+                )
             }
-
-            writePacket(
-                SshEnums.MessageType.SSH_MSG_USERAUTH_REQUEST.id().toInt(),
-                req.toByteArray(),
-            )
 
             val consumerJob = connectionScope.launch {
                 for (infoRequest in channel) {
@@ -738,7 +716,7 @@ class SshConnection(
                 channel.close()
                 consumerJob.cancel()
                 pendingAuth.clearIfSame(deferred)
-                withContext(stateMachineDispatcher) {
+                protocolExecutor.run {
                     if (infoRequestChannel === channel) {
                         infoRequestChannel = null
                     }
@@ -815,13 +793,14 @@ class SshConnection(
             }
 
             val deferred = CompletableDeferred<Boolean>()
-            dispatchCommand("BeginPublicKeyAuthentication") { beginAuthentication() }
-            pendingAuth.set(deferred)
-
-            writePacket(
-                SshEnums.MessageType.SSH_MSG_USERAUTH_REQUEST.id().toInt(),
-                req.toByteArray(),
-            )
+            protocolExecutor.run(ready = ::localCommandsReady) {
+                check(stateMachine.beginAuthentication())
+                pendingAuth.setDirect(deferred)
+                writePacket(
+                    SshEnums.MessageType.SSH_MSG_USERAUTH_REQUEST.id().toInt(),
+                    req.toByteArray(),
+                )
+            }
 
             try {
                 val success = deferred.await()
@@ -896,13 +875,13 @@ class SshConnection(
      */
     internal suspend fun authenticate(username: String, handler: AuthHandler): PublicAuthResult {
         val channel = Channel<InternalAuthResult>(Channel.UNLIMITED)
-        withContext(stateMachineDispatcher) {
+        protocolExecutor.run {
             authResultChannel = channel
         }
         try {
             return doAuthenticate(username, handler, channel)
         } finally {
-            withContext(stateMachineDispatcher) {
+            protocolExecutor.run {
                 authResultChannel = null
                 currentAuthMethod = null
             }
@@ -1160,7 +1139,6 @@ class SshConnection(
         method: String,
         configure: SshMsgUserauthRequest.() -> Unit,
     ) {
-        dispatchCommand("BeginAuthenticationRequest") { beginAuthentication() }
         val req = SshMsgUserauthRequest().apply {
             setUserName(createAsciiString(username))
             setServiceName(createAsciiString(SERVICE_SSH_CONNECTION))
@@ -1168,11 +1146,14 @@ class SshConnection(
             configure()
             _check()
         }
-        outboundPacketController.writePacket(
-            SshEnums.MessageType.SSH_MSG_USERAUTH_REQUEST.id().toInt(),
-            req.toByteArray(),
-            beforeWrite = { currentAuthMethod = AuthMethod.fromString(method) },
-        )
+        protocolExecutor.run(ready = ::localCommandsReady) {
+            check(stateMachine.beginAuthentication())
+            currentAuthMethod = AuthMethod.fromString(method)
+            writePacket(
+                SshEnums.MessageType.SSH_MSG_USERAUTH_REQUEST.id().toInt(),
+                req.toByteArray(),
+            )
+        }
     }
 
     // SshClientCallbacks implementation
@@ -1385,16 +1366,8 @@ class SshConnection(
     private fun rekeyComplete() {
         logger.info("Re-key complete")
         packetIO.resetByteCounters()
-        connectionScope.launch {
-            withContext(stateMachineDispatcher) {
-                while (pendingPingQueue.isNotEmpty()) {
-                    val action = pendingPingQueue.removeFirst()
-                    action()
-                }
-                isRekeying = false
-                startRekeyTimer()
-            }
-        }
+        isRekeying = false
+        startRekeyTimer()
     }
 
     private fun startRekeyTimer() {
@@ -1499,25 +1472,26 @@ class SshConnection(
 
         val publicKey = PublicKey(keyType, serverHostKey)
 
-        val trusted = hostKeyVerifier.verify(publicKey)
-
-        if (!trusted) {
-            logger.error("Host key verification failed")
-            throw HostKeyRejectedException(publicKey)
+        // Trust UI and other user callbacks run outside the protocol owner. The packet
+        // reader waits for this decision before decrypting another packet, while close
+        // and local protocol work remain able to enter the owner.
+        pendingHostVerification = connectionScope.async {
+            if (!hostKeyVerifier.verify(publicKey)) throw HostKeyRejectedException(publicKey)
+            protocolExecutor.run(awaitWrites = false) {
+                check(
+                    stateMachine.hostKeyVerified {
+                        serverHostKeyBlob = serverHostKey
+                        if (sessionId == null) sessionId = hash.copyOf()
+                        clientKexInit?.fill(0)
+                        clientKexInit = null
+                        serverKexInit?.fill(0)
+                        serverKexInit = null
+                        clientPublicKey?.fill(0)
+                        clientPublicKey = null
+                    },
+                ) { "Host key decision arrived after key exchange ended" }
+            }
         }
-        logger.info("Host key verified")
-
-        serverHostKeyBlob = serverHostKey
-        if (sessionId == null) {
-            sessionId = hash.copyOf()
-        }
-
-        clientKexInit?.fill(0)
-        clientKexInit = null
-        serverKexInit?.fill(0)
-        serverKexInit = null
-        clientPublicKey?.fill(0)
-        clientPublicKey = null
     }
 
     private suspend fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply) {
@@ -1532,20 +1506,22 @@ class SshConnection(
     private suspend fun sendNewKeys(resetSequenceNumber: Boolean) {
         logger.info("Sending NEW_KEYS")
         prepareEncryption()
+        val protection = pendingProtection ?: throw SshException("No staged packet protection")
+        val compressor = pendingSendCompressor
+        val compressionImmediate = pendingCompressionImmediate
+        pendingSendCompressor = null
         try {
             outboundPacketController.writePacket(
                 SshEnums.MessageType.SSH_MSG_NEWKEYS.id().toInt(),
                 afterWrite = {
-                    val protection = pendingProtection
-                        ?: throw SshException("No staged packet protection")
                     protection.installOutbound(packetIO)
-                    packetIO.enableSendCompression(pendingSendCompressor, pendingCompressionImmediate)
-                    pendingSendCompressor = null
+                    packetIO.enableSendCompression(compressor, compressionImmediate)
                     if (resetSequenceNumber) {
                         packetIO.resetSendSequenceNumber()
                     }
                     outboundPacketController.completeKex()
                 },
+                discard = { protection.destroy() },
             )
         } catch (e: Exception) {
             discardPendingEncryption()
@@ -1645,9 +1621,8 @@ class SshConnection(
 
     private fun activateEncryption() {
         logger.info("Encryption active")
-        pendingProtection?.destroy()
+        // The writer may still own the outbound half until NEWKEYS finishes writing.
         pendingProtection = null
-        pendingSendCompressor = null
         pendingReceiveCompressor = null
 
         kex?.zeroize()
@@ -1891,7 +1866,7 @@ class SshConnection(
         logger.info("Disconnecting (received SSH_MSG_DISCONNECT from server)")
         isRekeying = false
         authRequestPending = false
-        _disconnectedFlow.tryEmit(null)
+        if (!transportClosing) _disconnectedFlow.tryEmit(null)
         closeTransport()
     }
 
@@ -1959,6 +1934,7 @@ class SshConnection(
                         senderChannel,
                         maxPacketSize,
                         initialWindow,
+                        lifecycle = newChannelStateMachine(SshChannelState.OPEN),
                     )
 
                     channelRegistry.register(agentChannel)
@@ -2072,23 +2048,51 @@ class SshConnection(
         )
     }
 
-    suspend fun close() {
-        connectionScope.cancel()
-        closeTransport()
-        packetLoopJob?.join()
-        packetLoopJob = null
+    private val shutdownMutex = Mutex()
+    private var shutdownComplete = false
 
-        withContext(stateMachineDispatcher) {
-            val error = Exception("Connection closed")
-            for ((_, pending) in pendingPings) {
-                pending.deferred.complete(PingResult.Failure(error))
+    suspend fun close() = withContext(NonCancellable) {
+        shutdownMutex.withLock {
+            if (shutdownComplete) return@withLock
+            connectionScope.cancel()
+            closeTransport()
+            packetLoopJob?.join()
+            packetLoopJob = null
+
+            if (!protocolExecutor.isClosed) {
+                protocolExecutor.run(awaitWrites = false) {
+                    runCatching { stateMachine.disconnect() }
+                    clearPendingKeys()
+                    val error = Exception("Connection closed")
+                    for ((_, pending) in pendingPings) {
+                        pending.deferred.complete(PingResult.Failure(error))
+                    }
+                    pendingPings.clear()
+                }
             }
-            pendingPings.clear()
-            pendingPingQueue.clear()
-        }
 
-        sessionId?.fill(0)
-        sessionId = null
+            sessionId?.fill(0)
+            sessionId = null
+            protocolExecutor.cancel()
+            protocolScope.cancel()
+            shutdownComplete = true
+        }
+    }
+
+    private fun clearPendingKeys() {
+        discardPendingEncryption()
+        kex?.zeroize()
+        kex = null
+        sharedSecret?.fill(0)
+        sharedSecret = null
+        exchangeHash?.fill(0)
+        exchangeHash = null
+        clientKexInit?.fill(0)
+        clientKexInit = null
+        serverKexInit?.fill(0)
+        serverKexInit = null
+        clientPublicKey?.fill(0)
+        clientPublicKey = null
     }
 
     private fun onStateEnter(stateName: String) {
@@ -2128,11 +2132,12 @@ class SshConnection(
             ?: throw ProtocolViolationException("Channel confirmation with no pending open for channel $recipientChannel")
         if (!pending.lifecycle.openConfirmed {
                 channelRegistry.bindRemoteRecipient(pending, msg.senderChannel().toInt())
-                pending.deferred.complete(msg)
             }
         ) {
             throw ProtocolViolationException("Channel confirmation in ${pending.lifecycle.state} state for channel $recipientChannel")
         }
+        pending.onConfirmed(msg)
+        pending.deferred.complete(msg)
     }
 
     private suspend fun receiveChannelOpenFailure(msg: SshMsgChannelOpenFailure) {
@@ -2204,14 +2209,7 @@ class SshConnection(
         logger.info("Opening direct-tcpip channel to $host:$port (local=$localChannelNumber)")
 
         val deferred = CompletableDeferred<ForwardingChannel?>()
-        val lifecycle = SshChannelStateMachine(SshChannelState.OPENING)
-        channelRegistry.registerPendingForwarding(
-            localChannelNumber,
-            deferred,
-            maxPacketSize,
-            initialWindowSize,
-            lifecycle,
-        )
+        val lifecycle = newChannelStateMachine(SshChannelState.OPENING)
 
         val channelSpecificData = ChannelOpenDirectTcpip().apply {
             setHostToConnect(createByteString(host.toByteArray(Charsets.US_ASCII)))
@@ -2230,14 +2228,42 @@ class SshConnection(
             _check()
         }
 
+        var admitted = false
         return try {
-            writePacket(
-                SshEnums.MessageType.SSH_MSG_CHANNEL_OPEN.id().toInt(),
-                msg.toByteArray(),
-            )
+            protocolExecutor.run(ready = ::localCommandsReady) {
+                channelRegistry.registerPendingForwarding(
+                    localChannelNumber,
+                    deferred,
+                    maxPacketSize,
+                    initialWindowSize,
+                    lifecycle,
+                )
+                check(
+                    stateMachine.openChannel("direct-tcpip", localChannelNumber, initialWindowSize, maxPacketSize) {
+                        writePacket(SshEnums.MessageType.SSH_MSG_CHANNEL_OPEN.id().toInt(), msg.toByteArray())
+                    },
+                )
+                admitted = true
+            }
             deferred.await()
-        } finally {
-            channelRegistry.removePendingForwardingIf(localChannelNumber, deferred)?.lifecycle?.disconnect {}
+        } catch (failure: Throwable) {
+            if (!protocolExecutor.isClosed) {
+                withContext(NonCancellable) {
+                    protocolExecutor.run(awaitWrites = false) {
+                        if (admitted) {
+                            if (deferred.isCompleted && !deferred.isCancelled) {
+                                deferred.await()?.close()
+                            } else {
+                                // Keep the wire reply slot until the peer confirms or rejects.
+                                deferred.cancel()
+                            }
+                        } else {
+                            channelRegistry.removePendingForwardingIf(localChannelNumber, deferred)?.lifecycle?.disconnect {}
+                        }
+                    }
+                }
+            }
+            throw failure
         }
     }
 
@@ -2258,13 +2284,13 @@ class SshConnection(
         }
 
         val deferred = CompletableDeferred<ByteArray?>()
-        withContext(stateMachineDispatcher) {
+        protocolExecutor.run(ready = ::localCommandsReady) {
             pendingGlobalRequest.setDirect(deferred)
+            writePacket(
+                SshEnums.MessageType.SSH_MSG_GLOBAL_REQUEST.id().toInt(),
+                msg.toByteArray(),
+            )
         }
-        writePacket(
-            SshEnums.MessageType.SSH_MSG_GLOBAL_REQUEST.id().toInt(),
-            msg.toByteArray(),
-        )
 
         val responseData = try {
             deferred.await()
@@ -2347,6 +2373,7 @@ class SshConnection(
      */
     private inner class InboundPacketController {
         private val packetsReceivedDuringRekey = ArrayDeque<PacketIO.ReceivedPacket>()
+        val hasBufferedPackets: Boolean get() = packetsReceivedDuringRekey.isNotEmpty()
 
         private fun requireAccepted(accepted: Boolean, messageType: Any) {
             if (!accepted) {
@@ -2355,8 +2382,8 @@ class SshConnection(
         }
 
         suspend fun processNextPacket() {
-            val queuedPacket = withContext(stateMachineDispatcher) {
-                if (stateMachine.isKexInProgress()) null else packetsReceivedDuringRekey.removeFirstOrNull()
+            val queuedPacket = protocolExecutor.run(awaitWrites = false) {
+                if (stateMachine.isKexInProgress()) null else packetsReceivedDuringRekey.firstOrNull()
             }
             val receivedPacket = queuedPacket ?: packetIO.readPacketWithSequence()
             val packet = receivedPacket.payload
@@ -2365,7 +2392,7 @@ class SshConnection(
             val msgType = packet.messageType()
             logger.debug("Received packet: $msgType")
 
-            withContext(stateMachineDispatcher) {
+            protocolExecutor.run(awaitWrites = false) {
                 if (!isKeyExchangeMessage(messageNumber)) {
                     val description = "Non-KEX packet $msgType is forbidden during strict initial key exchange"
                     if (!stateMachine.authorizeNonKexPacket(description)) {
@@ -2378,7 +2405,7 @@ class SshConnection(
                         throw ProtocolViolationException("Too many higher-layer packets received during key exchange")
                     }
                     packetsReceivedDuringRekey.addLast(receivedPacket)
-                    return@withContext
+                    return@run
                 }
 
                 when (msgType) {
@@ -2451,6 +2478,7 @@ class SshConnection(
                             val remoteWindow = confirmationMsg.initialWindowSize()
                             val remoteMaxPacketSize = boundRemotePacketSize(confirmationMsg.maximumPacketSize())
                             var invalidPacketSize = false
+                            var abandonedChannel: ForwardingChannel? = null
                             if (!pending.lifecycle.openConfirmed {
                                     channelRegistry.bindRemoteRecipient(pending, remoteChannelNumber)
                                     if (remoteMaxPacketSize == null) {
@@ -2470,12 +2498,13 @@ class SshConnection(
                                             lifecycle = pending.lifecycle,
                                         )
                                         channelRegistry.promote(pending, channel)
-                                        pending.deferred.complete(channel)
+                                        if (!pending.deferred.complete(channel)) abandonedChannel = channel
                                     }
                                 }
                             ) {
                                 throw ProtocolViolationException("Channel confirmation in ${pending.lifecycle.state} state for channel $recipientChannel")
                             }
+                            abandonedChannel?.close()
                             if (invalidPacketSize) {
                                 logger.warn("Rejecting channel confirmation with invalid maximum packet size: ${confirmationMsg.maximumPacketSize()}")
                                 pending.lifecycle.sendClose { sendChannelClose(remoteChannelNumber) }
@@ -2708,17 +2737,7 @@ class SshConnection(
                             pong._check()
                             writePacket(SshEnums.MessageType.SSH_MSG_PONG.id().toInt(), pong.toByteArray())
                         }
-                        val sendNow = withContext(stateMachineDispatcher) {
-                            if (isRekeying) {
-                                pendingPingQueue.addLast(pongSend)
-                                false
-                            } else {
-                                true
-                            }
-                        }
-                        if (sendNow) {
-                            pongSend()
-                        }
+                        pongSend()
                     }
 
                     SshEnums.MessageType.SSH_MSG_PONG -> {
@@ -2727,7 +2746,7 @@ class SshConnection(
                         val seqBytes = msg.data().data()
                         if (seqBytes.size == 8) {
                             val seq = ByteBuffer.wrap(seqBytes).getLong()
-                            withContext(stateMachineDispatcher) {
+                            protocolExecutor.run {
                                 val pending = pendingPings.remove(seq)
                                 if (pending != null) {
                                     val sentTimeNs = pending.sentTimeNs
@@ -2808,6 +2827,11 @@ class SshConnection(
                         }
                     }
                 }
+                if (queuedPacket != null) packetsReceivedDuringRekey.removeFirst()
+            }
+            pendingHostVerification?.let { decision ->
+                decision.await()
+                pendingHostVerification = null
             }
         }
     }
@@ -2896,22 +2920,33 @@ class SshConnection(
 
     private suspend fun sendDisconnect() {
         logger.info("Sending disconnect (client-initiated)")
-        try {
+        val receipt = try {
             val msg = SshMsgDisconnect().apply {
                 setReasonCode(SshEnums.DisconnectReason.SSH_DISCONNECT_BY_APPLICATION)
                 setDescription(createUtf8String(""))
                 setLanguage(createAsciiString(""))
                 _check()
             }
-            writePacket(
+            outboundPacketController.writePacket(
                 SshEnums.MessageType.SSH_MSG_DISCONNECT.id().toInt(),
                 msg.toByteArray(),
             )
         } catch (e: Exception) {
             logger.debug("Failed to send disconnect", e)
+            null
         }
-        _disconnectedFlow.tryEmit(null)
-        closeTransport()
+        // The callback runs inside the protocol owner. Wait outside it so the
+        // writer can finish CHANNEL_CLOSE and DISCONNECT before transport teardown.
+        connectionScope.launch {
+            try {
+                withTimeout(5_000L) { receipt?.await() }
+            } catch (e: Exception) {
+                logger.debug("Disconnect write did not complete", e)
+            } finally {
+                _disconnectedFlow.tryEmit(null)
+                closeTransport()
+            }
+        }
     }
 
     private suspend fun sendProtocolError(description: String) {
@@ -2946,12 +2981,16 @@ class SshConnection(
                 while (isActive) {
                     logger.debug("Packet loop: waiting for next packet")
                     inboundPacketController.processNextPacket()
-                    if (!isRekeying && stateMachine.isPostAuthenticated() && (
-                            packetIO.bytesSentOnWire >= rekeyBytesLimit ||
-                                packetIO.bytesReceivedOnWire >= rekeyBytesLimit
-                            )
-                    ) {
-                        dispatchCommand("ByteLimitRekey") { requestRekey() }
+                    // Reader work must bypass local admission and never await writes.
+                    // Drain replayed packets before requesting another exchange.
+                    protocolExecutor.run(awaitWrites = false) {
+                        if (!isRekeying && !inboundPacketController.hasBufferedPackets && stateMachine.isPostAuthenticated() && (
+                                packetIO.bytesSentOnWire >= rekeyBytesLimit ||
+                                    packetIO.bytesReceivedOnWire >= rekeyBytesLimit
+                                )
+                        ) {
+                            check(stateMachine.requestRekey()) { "Byte-limit rekey is not valid in the current SSH state" }
+                        }
                     }
                 }
             } catch (_: CancellationException) {
@@ -2987,21 +3026,30 @@ class SshConnection(
                 loopException = loopFailure
             } finally {
                 val loopError = loopException ?: Exception("Packet loop terminated")
-                channelRegistry.disconnectAll(loopError)
-                withContext(stateMachineDispatcher) {
-                    pendingAuth.completeExceptionally(loopError)
-                    pendingChannelRequests.values.forEach { it.completeExceptionally(loopError) }
-                    pendingChannelRequests.clear()
-                    pendingGlobalRequest.completeExceptionally(loopError)
+                withContext(NonCancellable) {
+                    connectionScope.cancel()
+                    closeTransport()
+                    protocolExecutor.run(awaitWrites = false) {
+                        runCatching { stateMachine.disconnect() }
+                        channelRegistry.disconnectAll(loopError)
+                        pendingConnect?.completeExceptionally(loopError)
+                        pendingConnect = null
+                        pendingAuth.completeExceptionally(loopError)
+                        pendingChannelRequests.values.forEach { it.completeExceptionally(loopError) }
+                        pendingChannelRequests.clear()
+                        pendingGlobalRequest.completeExceptionally(loopError)
 
-                    for ((_, pending) in pendingPings) {
-                        pending.deferred.complete(PingResult.Failure(loopError))
+                        for ((_, pending) in pendingPings) {
+                            pending.deferred.complete(PingResult.Failure(loopError))
+                        }
+                        pendingPings.clear()
+                        clearPendingKeys()
                     }
-                    pendingPings.clear()
-                    pendingPingQueue.clear()
-                }
-                if (loopException != null) {
-                    _disconnectedFlow.tryEmit(loopException)
+                    if (loopException != null) {
+                        _disconnectedFlow.tryEmit(loopException)
+                    }
+                    protocolExecutor.cancel()
+                    protocolScope.cancel()
                 }
             }
         }
@@ -3028,10 +3076,41 @@ class SshConnection(
         logger.info("Opening session channel (local=$localChannelNumber)")
 
         val deferred = CompletableDeferred<SshMsgChannelOpenConfirmation?>()
-        val lifecycle = SshChannelStateMachine(SshChannelState.OPENING)
+        var channel: SessionChannel? = null
+        var admitted = false
+        val lifecycle = newChannelStateMachine(SshChannelState.OPENING)
         try {
-            withContext(stateMachineDispatcher) {
-                channelRegistry.registerPendingSession(localChannelNumber, deferred, lifecycle)
+            protocolExecutor.run(ready = ::localCommandsReady) {
+                channelRegistry.registerPendingSession(localChannelNumber, deferred, lifecycle) { confirmationMsg ->
+                    val remoteChannelNumber = confirmationMsg.senderChannel().toInt()
+                    val remoteWindow = confirmationMsg.initialWindowSize()
+                    val remoteMaxPacketSize = boundRemotePacketSize(confirmationMsg.maximumPacketSize())
+                    if (remoteMaxPacketSize == null) {
+                        logger.warn("Rejecting session channel confirmation with invalid maximum packet size: ${confirmationMsg.maximumPacketSize()}")
+                        channelRegistry.removePendingSessionIf(localChannelNumber, deferred)
+                        lifecycle.sendClose { sendChannelClose(remoteChannelNumber) }
+                        return@registerPendingSession
+                    }
+                    logger.info("Channel opened: local=$localChannelNumber, remote=$remoteChannelNumber, remoteWindow=$remoteWindow")
+
+                    channel = SessionChannel(
+                        this,
+                        connectionScope,
+                        localChannelNumber,
+                        remoteChannelNumber,
+                        remoteMaxPacketSize,
+                        remoteWindowSizeInitial = remoteWindow,
+                        initialWindowSize = initialWindowSize,
+                        canSendChaff = serverSupportsPing,
+                        obscureKeystrokeTimingIntervalMs = obscureKeystrokeTimingIntervalMs,
+                        lifecycle = lifecycle,
+                    )
+                    val pending = channelRegistry.findPendingSession(localChannelNumber)
+                        ?: error("Pending session channel $localChannelNumber disappeared before promotion")
+                    channelRegistry.promote(pending, checkNotNull(channel))
+                    if (deferred.isCancelled) channel.close()
+                    logger.debug("Session channel registered: local=$localChannelNumber, remote=$remoteChannelNumber")
+                }
                 check(
                     stateMachine.openChannel(
                         "session",
@@ -3040,59 +3119,33 @@ class SshConnection(
                         maxPacketSize,
                     ),
                 )
+                admitted = true
             }
         } catch (failure: Throwable) {
-            channelRegistry.removePendingSessionIf(localChannelNumber, deferred)?.lifecycle?.disconnect {}
+            if (admitted) {
+                deferred.cancel()
+                channel?.close()
+            } else {
+                channelRegistry.removePendingSessionIf(localChannelNumber, deferred)?.lifecycle?.disconnect {}
+            }
             throw failure
         }
 
-        val confirmationMsg = try {
+        try {
             deferred.await()
         } catch (failure: Throwable) {
-            channelRegistry.removePendingSessionIf(localChannelNumber, deferred)?.lifecycle?.disconnect {}
+            if (admitted) {
+                deferred.cancel()
+                channel?.close()
+            } else {
+                channelRegistry.removePendingSessionIf(localChannelNumber, deferred)?.lifecycle?.disconnect {}
+            }
             throw failure
-        } ?: return null
-
-        val remoteChannelNumber = confirmationMsg.senderChannel().toInt()
-        val remoteWindow = confirmationMsg.initialWindowSize()
-        val remoteMaxPacketSize = boundRemotePacketSize(confirmationMsg.maximumPacketSize())
-        if (remoteMaxPacketSize == null) {
-            logger.warn("Rejecting session channel confirmation with invalid maximum packet size: ${confirmationMsg.maximumPacketSize()}")
-            channelRegistry.removePendingSessionIf(localChannelNumber, deferred)
-            lifecycle.sendClose { sendChannelClose(remoteChannelNumber) }
-            return null
         }
-        logger.info("Channel opened: local=$localChannelNumber, remote=$remoteChannelNumber, remoteWindow=$remoteWindow")
-
-        val channel = SessionChannel(
-            this,
-            connectionScope,
-            localChannelNumber,
-            remoteChannelNumber,
-            remoteMaxPacketSize,
-            remoteWindowSizeInitial = remoteWindow,
-            initialWindowSize = initialWindowSize,
-            canSendChaff = serverSupportsPing,
-            obscureKeystrokeTimingIntervalMs = obscureKeystrokeTimingIntervalMs,
-            lifecycle = lifecycle,
-        )
-        val pending = channelRegistry.findPendingSession(localChannelNumber)
-            ?: error("Pending session channel $localChannelNumber disappeared before promotion")
-        channelRegistry.promote(pending, channel)
-        logger.debug("Session channel registered: local=$localChannelNumber, remote=$remoteChannelNumber")
 
         return channel
     }
 
-    /**
-     * Send a channel request (RFC 4254 section 5.4).
-     *
-     * @param recipientChannel Remote channel number
-     * @param requestType Request type (e.g., "shell", "pty-req")
-     * @param wantReply Whether to wait for a reply
-     * @param configureRequest Lambda to configure request-specific fields
-     * @return true if request succeeded (when wantReply=true), false otherwise
-     */
     internal suspend fun beginChannelRequest(
         recipientChannel: Int,
         requestType: String,
@@ -3109,14 +3162,15 @@ class SshConnection(
         }
 
         val deferred = if (wantReply) CompletableDeferred<Boolean>() else null
-        withContext(stateMachineDispatcher) {
+        protocolExecutor.run {
             if (deferred != null) {
                 val remoteEntry = channelRegistry.findByRemoteRecipient(recipientChannel)
                 val localChannelNumber = (remoteEntry as? SshChannelRegistry.Entry.Established.Session)?.localChannelNumber
                     ?: throw IllegalStateException("No session channel has remote channel number $recipientChannel")
-                check(pendingChannelRequests.put(localChannelNumber, deferred) == null) {
+                check(localChannelNumber !in pendingChannelRequests) {
                     "Channel $localChannelNumber already has a pending request"
                 }
+                pendingChannelRequests[localChannelNumber] = deferred
             }
             check(
                 stateMachine.sendChannelRequest(
@@ -3146,7 +3200,8 @@ class SshConnection(
     }
 
     internal suspend fun finishChannelRequest(deferred: CompletableDeferred<Boolean>) {
-        withContext(stateMachineDispatcher) {
+        if (!deferred.isCompleted || protocolExecutor.isClosed) return
+        protocolExecutor.run {
             pendingChannelRequests.entries.removeIf { it.value === deferred }
         }
     }
@@ -3190,7 +3245,7 @@ class SshConnection(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                withContext(stateMachineDispatcher) {
+                protocolExecutor.run {
                     if (pendingPings.remove(seq) != null) {
                         deferred.complete(PingResult.Failure(e))
                     }
@@ -3198,20 +3253,20 @@ class SshConnection(
             }
         }
 
-        withContext(stateMachineDispatcher) {
-            pendingPings[seq] = PendingPing(deferred, data)
-            if (isRekeying) {
-                pendingPingQueue.addLast(send)
-            } else {
+        try {
+            protocolExecutor.run(ready = ::localCommandsReady) {
+                pendingPings[seq] = PendingPing(deferred, data)
                 send()
             }
-        }
 
-        return try {
-            deferred.await()
+            return deferred.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return PingResult.Failure(e)
         } finally {
-            withContext(NonCancellable) {
-                withContext(stateMachineDispatcher) {
+            withContext(NonCancellable + stateMachineDispatcher) {
+                run {
                     pendingPings.remove(seq)
                 }
             }

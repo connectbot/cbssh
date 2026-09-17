@@ -54,6 +54,8 @@ internal enum class SshTransitionId {
     REJECT_NON_KEX_WAIT_KEX,
     REJECT_NON_KEX_WAIT_KEX_DH_GEX_INIT,
     REJECT_NON_KEX_WAIT_NEW_KEYS,
+    REJECT_NON_KEX_WAIT_HOST_KEY,
+    HOST_KEY_VERIFIED,
     REJECT_STRICT_KEX_INIT_NOT_FIRST,
     RECEIVE_INITIAL_STRICT_KEX_INIT,
     RECEIVE_INITIAL_NON_STRICT_KEX_INIT,
@@ -71,6 +73,7 @@ internal enum class SshTransitionId {
     UNEXPECTED_KEX_INIT_WAIT_KEX,
     UNEXPECTED_KEX_INIT_WAIT_KEX_DH_GEX_INIT,
     UNEXPECTED_KEX_INIT_WAIT_NEW_KEYS,
+    UNEXPECTED_KEX_INIT_WAIT_HOST_KEY,
     DISCONNECT,
 }
 
@@ -672,6 +675,7 @@ internal data class SshStateMachineFormalModel(
         SshTransitionId.UNEXPECTED_KEX_INIT_WAIT_KEX,
         SshTransitionId.UNEXPECTED_KEX_INIT_WAIT_KEX_DH_GEX_INIT,
         SshTransitionId.UNEXPECTED_KEX_INIT_WAIT_NEW_KEYS,
+        SshTransitionId.UNEXPECTED_KEX_INIT_WAIT_HOST_KEY,
         -> setOf(SshPacketClass.KEX_INIT)
 
         SshTransitionId.RECEIVE_KEX_DH_REPLY,
@@ -771,7 +775,7 @@ internal data class SshStateMachineFormalModel(
         appendLine("    \\/ /\\ strictKex /\\ ~rekeying /\\ state \\in KexStates")
         appendLine("       /\\ ~PacketTransitionEnabled")
         appendLine("    \\/ /\\ inboundPacket = \"KexInit\"")
-        appendLine("       /\\ state \\in {\"WaitKex\", \"WaitKexDhGexInit\", \"WaitNewKeys\"}")
+        appendLine("       /\\ state \\in {\"WaitKex\", \"WaitKexDhGexInit\", \"WaitHostKey\", \"WaitNewKeys\"}")
         appendLine("    \\/ /\\ inboundPacket = \"KexReply\"")
         appendLine("       /\\ (~inboundHostSignatureValid \\/ ~inboundTranscriptMatches)")
         appendLine("    \\/ /\\ initialNewKeysActive /\\ ~inboundTransportValid")
@@ -859,7 +863,7 @@ internal data class SshStateMachineFormalModel(
     companion object {
         const val GENERATED_MODULE_NAME = "SshClientStateMachineGenerated"
         private const val POST_AUTHENTICATED_STATE = "PostAuthenticated"
-        private val KEX_STATE_NAMES = sortedSetOf("WaitKexInit", "WaitKex", "WaitKexDhGexInit", "WaitNewKeys")
+        private val KEX_STATE_NAMES = sortedSetOf("WaitKexInit", "WaitKex", "WaitKexDhGexInit", "WaitHostKey", "WaitNewKeys")
         private val AUTH_REQUEST_RESPONSE_TRANSITIONS = setOf(
             SshTransitionId.AUTHENTICATION_SUCCESS,
             SshTransitionId.AUTHENTICATION_FAILURE,

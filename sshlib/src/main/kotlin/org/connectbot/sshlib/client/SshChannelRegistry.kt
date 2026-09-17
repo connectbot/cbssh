@@ -49,6 +49,7 @@ internal class SshChannelRegistry {
                 val deferred: CompletableDeferred<SshMsgChannelOpenConfirmation?>,
                 override val lifecycle: SshChannelStateMachine,
                 override var remoteChannelNumber: Int? = null,
+                val onConfirmed: suspend (SshMsgChannelOpenConfirmation) -> Unit = {},
             ) : Pending {
                 override val kind = Kind.SESSION
             }
@@ -112,7 +113,8 @@ internal class SshChannelRegistry {
         localChannelNumber: Int,
         deferred: CompletableDeferred<SshMsgChannelOpenConfirmation?>,
         lifecycle: SshChannelStateMachine,
-    ) = register(Entry.Pending.Session(localChannelNumber, deferred, lifecycle))
+        onConfirmed: suspend (SshMsgChannelOpenConfirmation) -> Unit = {},
+    ) = register(Entry.Pending.Session(localChannelNumber, deferred, lifecycle, onConfirmed = onConfirmed))
 
     fun registerPendingForwarding(
         localChannelNumber: Int,

@@ -243,16 +243,22 @@ KexEventsAreStrictlySequenced ==
         /\ "SendKexExchangeInit" \in effects
     /\ event \in {"ReceiveKex.DhReply", "ReceiveKex.EcdhReply"} =>
         /\ previousState = "WaitKex"
-        /\ state = "WaitNewKeys"
-        /\ "SendNewKeys" \in effects
-        /\ "ActivateOutboundProtection" \in effects
-        /\ (strictKex => "ResetOutboundSequence" \in effects)
+        /\ state = "WaitHostKey"
+        /\ "VerifyHostKeyPossession" \in effects
+        /\ "VerifyKexTranscript" \in effects
+        /\ "SendNewKeys" \notin effects
     /\ event = "ReceiveKex.DhGexGroup" =>
         /\ previousState = "WaitKex"
         /\ state = "WaitKexDhGexInit"
         /\ "SendKexDhGexInit" \in effects
     /\ event = "ReceiveKex.DhGexReply" =>
         /\ previousState = "WaitKexDhGexInit"
+        /\ state = "WaitHostKey"
+        /\ "VerifyHostKeyPossession" \in effects
+        /\ "VerifyKexTranscript" \in effects
+        /\ "SendNewKeys" \notin effects
+    /\ event = "HostKeyVerified" =>
+        /\ previousState = "WaitHostKey"
         /\ state = "WaitNewKeys"
         /\ "SendNewKeys" \in effects
         /\ "ActivateOutboundProtection" \in effects
@@ -272,7 +278,7 @@ StrictKexIsSticky ==
     [] (strictKex => [] strictKex)
 
 StrictInitialKexRejectsNonKexPackets ==
-    event = "ReceiveNonKexPacket" /\ previousState \in {"WaitKex", "WaitKexDhGexInit", "WaitNewKeys"} =>
+    event = "ReceiveNonKexPacket" /\ previousState \in {"WaitKex", "WaitKexDhGexInit", "WaitHostKey", "WaitNewKeys"} =>
         /\ strictKex
         /\ state = "Disconnected"
         /\ "SendProtocolError" \in effects
@@ -296,7 +302,7 @@ UserAuthenticationRequiresInitialNewKeys ==
 
 UnexpectedKexInitIsFatal ==
     event = "UnexpectedKexInit" =>
-        /\ previousState \in {"WaitKex", "WaitKexDhGexInit", "WaitNewKeys"}
+        /\ previousState \in {"WaitKex", "WaitKexDhGexInit", "WaitHostKey", "WaitNewKeys"}
         /\ state = "Disconnected"
         /\ "SendProtocolError" \in effects
         /\ "Disconnect" \in effects

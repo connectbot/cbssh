@@ -84,6 +84,7 @@ internal class SshClientStateMachine(
             data class DhGexGroup(val msg: SshMsgKexDhGexGroup) : ReceiveKex()
             data class DhGexReply(val msg: SshMsgKexDhGexReply) : ReceiveKex()
         }
+        class HostKeyVerified(val commit: () -> Unit) : SshEvent()
         object ReceiveNewKeys : SshEvent()
         data class ReceiveServiceAccept(val service: String) : SshEvent()
         object BeginAuthentication : SshEvent()
@@ -96,6 +97,7 @@ internal class SshClientStateMachine(
             val localChannelNumber: Int,
             val initialWindowSize: Int,
             val maxPacketSize: Int,
+            val send: (suspend () -> Unit)? = null,
         ) : SshEvent()
         data class ReceiveChannelOpenConfirmation(val msg: SshMsgChannelOpenConfirmation) : SshEvent()
         data class ReceiveChannelOpenFailure(val msg: SshMsgChannelOpenFailure) : SshEvent()
@@ -126,6 +128,7 @@ internal class SshClientStateMachine(
         val waitKexInit = state("WaitKexInit")
         val waitKex = state("WaitKex")
         val waitKexDhGexInit = state("WaitKexDhGexInit")
+        val waitHostKey = state("WaitHostKey")
         val waitNewKeys = state("WaitNewKeys")
         val waitService = state("WaitService")
         val disconnected = finalState("Disconnected")
@@ -212,12 +215,17 @@ internal class SshClientStateMachine(
                     effects = setOf(SshEffect.SEND_CHANNEL_OPEN),
                     channelOperationEvent = SshChannelEventId.ALLOCATE_LOCAL_OPEN,
                 ) {
-                    callbacks.sendChannelOpen(
-                        it.event.channelType,
-                        it.event.localChannelNumber,
-                        it.event.initialWindowSize,
-                        it.event.maxPacketSize,
-                    )
+                    val send = it.event.send
+                    if (send != null) {
+                        send()
+                    } else {
+                        callbacks.sendChannelOpen(
+                            it.event.channelType,
+                            it.event.localChannelNumber,
+                            it.event.initialWindowSize,
+                            it.event.maxPacketSize,
+                        )
+                    }
                 }
                 formalTransition<SshEvent.ReceiveChannelOpenConfirmation>(
                     id = SshTransitionId.RECEIVE_CHANNEL_OPEN_CONFIRMATION,
@@ -393,35 +401,27 @@ internal class SshClientStateMachine(
 
             formalTransition<SshEvent.ReceiveKex.DhReply>(
                 id = SshTransitionId.RECEIVE_KEX_DH_REPLY,
-                targetState = waitNewKeys,
+                targetState = waitHostKey,
                 origins = parsedPacket,
                 effects = setOf(
                     SshEffect.RECEIVE_KEX_DH_REPLY,
                     SshEffect.VERIFY_HOST_KEY_POSSESSION,
                     SshEffect.VERIFY_KEX_TRANSCRIPT,
-                    SshEffect.SEND_NEW_KEYS,
-                    SshEffect.ACTIVATE_OUTBOUND_PROTECTION,
-                    SshEffect.RESET_OUTBOUND_SEQUENCE,
                 ),
             ) {
                 callbacks.receiveKexDhReply(it.event.msg)
-                callbacks.sendNewKeys(strictKexEnabled)
             }
             formalTransition<SshEvent.ReceiveKex.EcdhReply>(
                 id = SshTransitionId.RECEIVE_KEX_ECDH_REPLY,
-                targetState = waitNewKeys,
+                targetState = waitHostKey,
                 origins = parsedPacket,
                 effects = setOf(
                     SshEffect.RECEIVE_KEX_ECDH_REPLY,
                     SshEffect.VERIFY_HOST_KEY_POSSESSION,
                     SshEffect.VERIFY_KEX_TRANSCRIPT,
-                    SshEffect.SEND_NEW_KEYS,
-                    SshEffect.ACTIVATE_OUTBOUND_PROTECTION,
-                    SshEffect.RESET_OUTBOUND_SEQUENCE,
                 ),
             ) {
                 callbacks.receiveKexEcdhReply(it.event.msg)
-                callbacks.sendNewKeys(strictKexEnabled)
             }
             formalTransition<SshEvent.ReceiveKex.DhGexGroup>(
                 id = SshTransitionId.RECEIVE_KEX_DH_GEX_GROUP,
@@ -451,22 +451,45 @@ internal class SshClientStateMachine(
 
             formalTransition<SshEvent.ReceiveKex.DhGexReply>(
                 id = SshTransitionId.RECEIVE_KEX_DH_GEX_REPLY,
-                targetState = waitNewKeys,
+                targetState = waitHostKey,
                 origins = parsedPacket,
                 effects = setOf(
                     SshEffect.RECEIVE_KEX_DH_GEX_REPLY,
                     SshEffect.VERIFY_HOST_KEY_POSSESSION,
                     SshEffect.VERIFY_KEX_TRANSCRIPT,
-                    SshEffect.SEND_NEW_KEYS,
-                    SshEffect.ACTIVATE_OUTBOUND_PROTECTION,
-                    SshEffect.RESET_OUTBOUND_SEQUENCE,
                 ),
             ) {
                 callbacks.receiveKexDhGexReply(it.event.msg)
-                callbacks.sendNewKeys(strictKexEnabled)
             }
             formalTransition<SshEvent.UnexpectedKexInit>(
                 id = SshTransitionId.UNEXPECTED_KEX_INIT_WAIT_KEX_DH_GEX_INIT,
+                targetState = disconnected,
+                origins = parsedPacket,
+                effects = setOf(SshEffect.SEND_PROTOCOL_ERROR, SshEffect.DISCONNECT),
+            ) { callbacks.sendProtocolError(it.event.description) }
+        }
+
+        waitHostKey {
+            onEntry { callbacks.onStateEnter("WaitHostKey") }
+            onExit { callbacks.onStateExit("WaitHostKey") }
+            formalTransition<SshEvent.HostKeyVerified>(
+                id = SshTransitionId.HOST_KEY_VERIFIED,
+                targetState = waitNewKeys,
+                origins = setOf(SshEventOrigin.INTERNAL),
+                effects = setOf(SshEffect.SEND_NEW_KEYS, SshEffect.ACTIVATE_OUTBOUND_PROTECTION, SshEffect.RESET_OUTBOUND_SEQUENCE),
+            ) {
+                it.event.commit()
+                callbacks.sendNewKeys(strictKexEnabled)
+            }
+            formalTransition<SshEvent.ReceiveNonKexPacket>(
+                id = SshTransitionId.REJECT_NON_KEX_WAIT_HOST_KEY,
+                targetState = disconnected,
+                guard = strictKex and !rekeying,
+                origins = parsedPacket,
+                effects = setOf(SshEffect.SEND_PROTOCOL_ERROR, SshEffect.DISCONNECT),
+            ) { callbacks.sendProtocolError(it.event.description) }
+            formalTransition<SshEvent.UnexpectedKexInit>(
+                id = SshTransitionId.UNEXPECTED_KEX_INIT_WAIT_HOST_KEY,
                 targetState = disconnected,
                 origins = parsedPacket,
                 effects = setOf(SshEffect.SEND_PROTOCOL_ERROR, SshEffect.DISCONNECT),
@@ -624,6 +647,8 @@ internal class SshClientStateMachine(
 
     suspend fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply): Boolean = process(SshEvent.ReceiveKex.DhGexReply(msg))
 
+    suspend fun hostKeyVerified(commit: () -> Unit = {}): Boolean = process(SshEvent.HostKeyVerified(commit))
+
     suspend fun receiveNewKeys(): Boolean = process(SshEvent.ReceiveNewKeys)
 
     suspend fun receiveServiceAccept(service: String): Boolean = service == "ssh-userauth" && process(SshEvent.ReceiveServiceAccept(service))
@@ -638,7 +663,7 @@ internal class SshClientStateMachine(
 
     suspend fun receiveUserauthBanner(msg: SshMsgUserauthBanner): Boolean = process(SshEvent.ReceiveUserauthBanner(msg))
 
-    suspend fun openChannel(channelType: String, localChannelNumber: Int, initialWindowSize: Int, maxPacketSize: Int): Boolean = process(SshEvent.OpenChannel(channelType, localChannelNumber, initialWindowSize, maxPacketSize))
+    suspend fun openChannel(channelType: String, localChannelNumber: Int, initialWindowSize: Int, maxPacketSize: Int, send: (suspend () -> Unit)? = null): Boolean = process(SshEvent.OpenChannel(channelType, localChannelNumber, initialWindowSize, maxPacketSize, send))
 
     suspend fun receiveChannelOpenConfirmation(msg: SshMsgChannelOpenConfirmation): Boolean = process(SshEvent.ReceiveChannelOpenConfirmation(msg))
 
@@ -683,7 +708,7 @@ internal class SshClientStateMachine(
     fun isPostAuthenticated(): Boolean = stateMachine.activeStates().any { it.name == "PostAuthenticated" }
 
     fun isKexInProgress(): Boolean = stateMachine.activeStates().any {
-        it.name == "WaitKexInit" || it.name == "WaitKex" || it.name == "WaitKexDhGexInit" || it.name == "WaitNewKeys"
+        it.name == "WaitKexInit" || it.name == "WaitKex" || it.name == "WaitKexDhGexInit" || it.name == "WaitHostKey" || it.name == "WaitNewKeys"
     }
 
     fun isWaitingForKexInit(): Boolean = stateMachine.activeStates().any { it.name == "WaitKexInit" }

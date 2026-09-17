@@ -123,11 +123,11 @@ class SshStateMachineFormalModelTest {
         )
         assertTrue(
             SshEffect.ACTIVATE_OUTBOUND_PROTECTION in
-                transitions.getValue(SshTransitionId.RECEIVE_KEX_ECDH_REPLY).meta.effects,
+                transitions.getValue(SshTransitionId.HOST_KEY_VERIFIED).meta.effects,
         )
         assertTrue(
             SshEffect.RESET_OUTBOUND_SEQUENCE in
-                transitions.getValue(SshTransitionId.RECEIVE_KEX_ECDH_REPLY).meta.effects,
+                transitions.getValue(SshTransitionId.HOST_KEY_VERIFIED).meta.effects,
         )
         assertTrue(
             SshEffect.ACTIVATE_INBOUND_PROTECTION in
@@ -192,7 +192,7 @@ class SshStateMachineFormalModelTest {
         assertTrue(SshEffect.ENABLE_STRICT_KEX in strictInit.effects)
 
         // Sequence number reset on initial KEX completion (modeled in SshTerrapin.CompleteInitialKex)
-        val ecdhReply = transitions.getValue(SshTransitionId.RECEIVE_KEX_ECDH_REPLY).meta
+        val ecdhReply = transitions.getValue(SshTransitionId.HOST_KEY_VERIFIED).meta
         assertTrue(SshEffect.RESET_OUTBOUND_SEQUENCE in ecdhReply.effects)
 
         // Unauthenticated packet injection abort under strict KEX (modeled in SshTerrapin.InjectUnauthenticatedIgnore)
@@ -228,7 +228,7 @@ class SshStateMachineFormalModelTest {
             .filter { it.meta.eventName == "UnexpectedKexInit" }
 
         assertEquals(
-            setOf("WaitKex", "WaitKexDhGexInit", "WaitNewKeys"),
+            setOf("WaitKex", "WaitKexDhGexInit", "WaitHostKey", "WaitNewKeys"),
             transitions.flatMapTo(mutableSetOf()) { it.sourceStateNames },
         )
         assertTrue(transitions.all { it.meta.targetStateName == "Disconnected" })
