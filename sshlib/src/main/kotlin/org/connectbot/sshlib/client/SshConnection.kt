@@ -464,7 +464,11 @@ class SshConnection(
     private val pendingChannelRequests = HashMap<Int, CompletableDeferred<Boolean>>()
     private val pendingGlobalRequest = PendingValue<ByteArray?>()
 
-    private val remoteForwarders = ConcurrentHashMap<String, suspend (connectedAddr: String, connectedPort: Int, originAddr: String, originPort: Int, senderChannel: Int, initialWindow: Long, maxPacketSize: Int) -> Unit>()
+    private class RemoteForwarderRegistration(
+        val scope: CoroutineScope,
+        val handler: suspend (String, Int, String, Int, Int, Long, Int) -> Unit,
+    )
+    private val remoteForwarders = ConcurrentHashMap<String, RemoteForwarderRegistration>()
 
     private var infoRequestChannel: Channel<SshMsgUserauthInfoRequest>? = null
 
@@ -1993,7 +1997,15 @@ class SshConnection(
                 return
             }
 
-            handler(connectedAddr, connectedPort, originAddr, originPort, senderChannel, initialWindow, maxPacketSize)
+            handler.scope.launch {
+                try {
+                    handler.handler(connectedAddr, connectedPort, originAddr, originPort, senderChannel, initialWindow, maxPacketSize)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    protocolExecutor.run { rejectChannelOpen(senderChannel, CHANNEL_FORWARDED_TCPIP) }
+                }
+            }
         } catch (e: Exception) {
             logger.error("Failed to handle $CHANNEL_FORWARDED_TCPIP", e)
             rejectChannelOpen(senderChannel, CHANNEL_FORWARDED_TCPIP)
@@ -2332,11 +2344,12 @@ class SshConnection(
     }
 
     internal fun registerRemoteForwarder(key: String, handler: suspend (String, Int, String, Int, Int, Long, Int) -> Unit) {
-        remoteForwarders[key] = handler
+        val scope = CoroutineScope(connectionScope.coroutineContext + SupervisorJob(connectionScope.coroutineContext[Job]))
+        remoteForwarders.put(key, RemoteForwarderRegistration(scope, handler))?.scope?.cancel()
     }
 
     internal fun unregisterRemoteForwarder(key: String) {
-        remoteForwarders.remove(key)
+        remoteForwarders.remove(key)?.scope?.cancel()
     }
 
     internal fun registerForwardingChannel(channel: ForwardingChannel) {

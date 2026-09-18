@@ -18,12 +18,17 @@
 package org.connectbot.sshlib.client
 
 import io.ktor.network.selector.SelectorManager
+import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
 import io.ktor.network.sockets.openReadChannel
 import io.ktor.network.sockets.openWriteChannel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import org.connectbot.sshlib.PortForwarder
+import org.connectbot.sshlib.protocol.SshChannelState
 import org.slf4j.LoggerFactory
 
 internal class RemotePortForwarder(
@@ -88,11 +93,13 @@ internal class RemotePortForwarder(
 
         var registeredChannel: ForwardingChannel? = null
         var confirmationSent = false
+        val selectorManager = SelectorManager(Dispatchers.IO)
+        var socket: Socket? = null
         try {
             val localChannelNumber = connection.allocateChannelNumber()
 
-            val selectorManager = SelectorManager(Dispatchers.IO)
-            val socket = aSocket(selectorManager).tcp().connect(localHost, localPort)
+            val connectedSocket = aSocket(selectorManager).tcp().connect(localHost, localPort)
+            socket = connectedSocket
 
             val fwdChannel = ForwardingChannel(
                 connection,
@@ -102,51 +109,74 @@ internal class RemotePortForwarder(
                 maxPacketSize,
                 remoteWindowSizeInitial = initialWindow,
                 initialWindowSize = 256 * 1024,
+                lifecycle = connection.newChannelStateMachine(SshChannelState.OPEN),
             )
             connection.registerForwardingChannel(fwdChannel)
             registeredChannel = fwdChannel
 
-            connection.sendChannelOpenConfirmationPublic(
-                recipientChannel = senderChannel,
-                senderChannel = localChannelNumber,
-                initialWindowSize = 256 * 1024,
-                maximumPacketSize = 32 * 1024,
-            )
-            confirmationSent = true
-
-            val readChannel = socket.openReadChannel()
-            val writeChannel = socket.openWriteChannel(autoFlush = false)
-
-            val forwarder = DataForwarder(scope, fwdChannel, readChannel, writeChannel)
-            synchronized(dataForwarders) { dataForwarders.add(forwarder) }
-            forwarder.start()
-        } catch (e: Exception) {
-            registeredChannel?.let { channel ->
-                connection.unregisterForwardingChannel(channel)
-                if (confirmationSent) channel.close() else channel.onDisconnected()
-            }
-            logger.warn("Failed to handle incoming forwarded-tcpip: ${e.message}")
-            if (!confirmationSent) {
-                connection.sendChannelOpenFailurePublic(
+            connection.protocolExecutor.run {
+                connection.sendChannelOpenConfirmationPublic(
                     recipientChannel = senderChannel,
-                    reasonCode = 2, // SSH_OPEN_CONNECT_FAILED
-                    description = "Failed to connect to local target: ${e.message}",
-                    languageTag = "",
+                    senderChannel = localChannelNumber,
+                    initialWindowSize = 256 * 1024,
+                    maximumPacketSize = 32 * 1024,
                 )
+                confirmationSent = true
             }
+
+            val readChannel = connectedSocket.openReadChannel()
+            val writeChannel = connectedSocket.openWriteChannel(autoFlush = false)
+
+            val forwarder = DataForwarder(scope, fwdChannel, readChannel, writeChannel) {
+                connectedSocket.close()
+                selectorManager.close()
+            }
+            synchronized(dataForwarders) {
+                check(_isActive) { "Remote forwarder stopped" }
+                dataForwarders.add(forwarder)
+                forwarder.start()
+            }
+        } catch (e: Exception) {
+            socket?.close()
+            selectorManager.close()
+            logger.warn("Failed to handle incoming forwarded-tcpip: ${e.message}")
+            withContext(NonCancellable) {
+                if (!connection.protocolExecutor.isClosed) {
+                    connection.protocolExecutor.run(awaitWrites = false) {
+                        registeredChannel?.let { channel ->
+                            if (confirmationSent) {
+                                channel.close()
+                            } else {
+                                connection.unregisterForwardingChannel(channel)
+                                channel.onDisconnected()
+                            }
+                        }
+                        if (!confirmationSent) {
+                            connection.sendChannelOpenFailurePublic(
+                                recipientChannel = senderChannel,
+                                reasonCode = 2, // SSH_OPEN_CONNECT_FAILED
+                                description = "Failed to connect to local target: ${e.message}",
+                                languageTag = "",
+                            )
+                        }
+                    }
+                }
+            }
+            if (e is CancellationException) throw e
         }
     }
 
     override suspend fun stop() {
-        if (!_isActive) return
-        _isActive = false
+        val forwarders = synchronized(dataForwarders) {
+            if (!_isActive) return
+            _isActive = false
+            dataForwarders.toList()
+        }
 
         val key = "$remoteBindAddress:$remoteBindPort"
         connection.unregisterRemoteForwarder(key)
         connection.sendCancelTcpipForward(remoteBindAddress, remoteBindPort)
 
-        synchronized(dataForwarders) {
-            dataForwarders.toList()
-        }.forEach { it.stop() }
+        forwarders.forEach { it.stop() }
     }
 }

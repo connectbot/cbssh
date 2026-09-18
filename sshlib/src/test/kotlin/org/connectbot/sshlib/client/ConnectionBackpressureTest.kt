@@ -49,6 +49,28 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionBackpressureTest {
     @Test
+    fun `unregistering remote forwarder cancels suspended handlers and releases resources`() = runTest {
+        fixture { connection, server, _ ->
+            val entered = CompletableDeferred<Unit>()
+            val released = CompletableDeferred<Unit>()
+            connection.registerRemoteForwarder("127.0.0.1:8080") { _, _, _, _, _, _, _ ->
+                try {
+                    entered.complete(Unit)
+                    awaitCancellation()
+                } finally {
+                    released.complete(Unit)
+                }
+            }
+            server.sendForwardedTcpipChannelOpen(100, "127.0.0.1", 8080, "127.0.0.1", 12345)
+            withTimeout(1_000) { entered.await() }
+            connection.unregisterRemoteForwarder("127.0.0.1:8080")
+            withTimeout(1_000) { released.await() }
+            server.sendForwardedTcpipChannelOpen(101, "127.0.0.1", 8080, "127.0.0.1", 12345)
+            assertEquals(101L, withTimeout(1_000) { server.awaitChannelOpenFailure() }.recipientChannel())
+        }
+    }
+
+    @Test
     fun `protocol output exhaustion closes connection and resolves outstanding operations`() = runTest {
         fixture(ignoreTransportErrors = true) { connection, server, transport ->
             val session = openSession(connection, server)

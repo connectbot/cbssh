@@ -1,6 +1,6 @@
 /*
  * ConnectBot SSH Library
- * Copyright 2025 Kenny Root
+ * Copyright 2025-2026 Kenny Root
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ internal class DataForwarder(
     private val sshChannel: ForwardingChannel,
     private val tcpRead: ByteReadChannel,
     private val tcpWrite: ByteWriteChannel,
+    private val closeTransport: () -> Unit = {},
 ) {
     companion object {
         private val logger = LoggerFactory.getLogger(DataForwarder::class.java)
@@ -66,7 +67,11 @@ internal class DataForwarder(
             } catch (e: Exception) {
                 logger.debug("DataForwarder ended: ${e.message}")
             } finally {
-                cleanup()
+                try {
+                    cleanup()
+                } finally {
+                    closeTransport()
+                }
             }
         }
     }
