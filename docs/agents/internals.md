@@ -102,24 +102,41 @@ Kaitai's `AsciiString` validates that the string is ≤ 65535 bytes. Do not use 
 This codebase has a carefully designed concurrency model. Violating these rules introduces
 races, deadlocks, or thread starvation.
 
-**Connection protocol state has two serialization layers:**
-- `stateMachineDispatcher` serializes connection-owned bookkeeping between suspension points.
-- `SshClientStateMachine` uses an internal `Mutex` to serialize complete event processing,
-  including suspending transition callbacks. A limited-parallelism dispatcher is not a mutex:
-  another coroutine may run on it while the first coroutine is suspended.
-- Every caller must receive the final `PROCESSED` or `IGNORED` result for its own event. The
-  KStateMachine pending-event handler throws because `PENDING` would make packet authorization
-  ambiguous.
-- All reads and writes of protocol state (`pendingAuth`, `pendingChannelOpen`,
-  `pendingChannelRequest`, `pendingGlobalRequest`, `currentAuthMethod`, `authResultChannel`,
-  `infoRequestChannel`) must happen inside `withContext(stateMachineDispatcher)`.
-- `PendingValue.complete()` and `completeExceptionally()` are non-`suspend` but must only be
-  called from within the dispatcher. The teardown path in `startPacketLoop` wraps its cleanup
-  in `withContext(stateMachineDispatcher)` for this reason.
-- When you need to atomically set a `PendingValue` *and* send a packet or dispatch an event,
-  use `PendingValue.setDirect()` inside a single `withContext(stateMachineDispatcher)` block.
-  See `sendAuthRequest`, `openSessionChannel`, `sendChannelRequest`, and
-  `sendTcpipForwardRequest` for the established pattern.
+**Connection protocol decisions have one owner:**
+- `ProtocolExecutor` processes a bounded mailbox sequentially. Enter it before taking a channel
+  lifecycle lock. `limitedParallelism(1)` confines shared writer bookkeeping between suspension
+  points; it is not the mechanism that serializes complete protocol operations.
+- KStateMachine still checks every transition and authorizes every packet. Its pending-event
+  handler throws: `PENDING` is never authorization. The state-machine mutexes remain a defensive
+  boundary for standalone use and tests.
+- Transition callbacks register pending replies and enqueue immutable packet effects. `DeferredIo`
+  collects write receipts; local callers await them after leaving the owner and lifecycle locks.
+  Inbound processing waits for decisions, not outbound writes. Never await a peer reply or channel
+  window credit inside the owner.
+- A write receipt means `Transport.write` returned, not that the remote application processed the
+  data. Connection close aborts outstanding work; it does not drain writes. Await the write before
+  closing for local send completion, and await an application response when remote processing
+  matters. Automatic disconnect after the last channel closes waits outside the owner for
+  the final DISCONNECT receipt, bounded to five seconds; explicit connection close still aborts.
+- Byte-limit rekey checks run in the owner without local admission permits or write waits.
+  The packet reader drains buffered packets before triggering another exchange.
+- `PacketWriter` is the sole binary packet writer. Its bounded ordinary queue and reserved control
+  capacity preserve KEX progress under backpressure. Local admission is bounded separately so
+  packet input and shutdown can always enter the owner. Exhausting protocol-generated output
+  capacity terminates the transport rather than allocating an unbounded queue.
+- Local channel commands arriving during rekey wait outside the owner, then run their normal
+  state-machine guards. Cancellation before admission skips the command. Once admitted, a write
+  is not retracted: its pending reply slot remains until the peer replies or the connection ends.
+- `WaitHostKey` is explicit in KStateMachine. Host verification runs outside the owner and returns
+  through `HostKeyVerified`. The reader waits outside the owner for that decision before reading
+  the next packet. Outbound protection switches only after the NEWKEYS write completes; inbound
+  protection switches before the next packet is read. Each direction owns its staged protection.
+- Keep pending authentication, channel requests, global requests, and authentication-method
+  bookkeeping in `protocolExecutor.run`. Register a reply and schedule its packet in one operation.
+- SFTP serializes request framing with its write mutex, but releases its lifecycle lock before
+  writing or waiting for SSH window credit. This lets response processing and disconnect proceed.
+- Each remote-forwarder registration owns its pending handler coroutines. Unregistering cancels
+  them; cancellation after confirmation admission closes the channel rather than rejecting the open.
 
 **Never use `runBlocking` inside coroutine code:**
 - `processNextPacket` and all its callees are `suspend`. Call `suspend` functions directly.
@@ -142,10 +159,10 @@ races, deadlocks, or thread starvation.
   loop coroutine) and read by send functions (caller's coroutine).
 
 **`PendingValue<T>` contract:**
-- `set(deferred)` — `suspend`, enters dispatcher, safe from any context.
-- `setDirect(deferred)` — non-`suspend`, must be called from within `stateMachineDispatcher`.
-- `complete(value)` — non-`suspend`, must be called from within `stateMachineDispatcher`;
+- `set(deferred)` — `suspend`, enters the owner, safe from any context.
+- `setDirect(deferred)` — non-`suspend`, must be called from within the protocol owner.
+- `complete(value)` — non-`suspend`, must be called from within the protocol owner;
   returns `Boolean` (true if a deferred was present).
-- `completeExceptionally(e)` — non-`suspend`, must be called from within `stateMachineDispatcher`.
+- `completeExceptionally(e)` — non-`suspend`, must be called from within the protocol owner.
 - `clearIfSame(expected)` — `suspend`, safe from any context; use in `finally` blocks to
-  avoid clearing a deferred that has already been replaced by a subsequent request.
+  remove completed slots only. Cancelling a caller does not remove an outstanding wire reply slot.

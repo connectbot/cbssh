@@ -97,6 +97,13 @@ interface SshSession : AutoCloseable {
      */
     suspend fun requestSubsystem(name: String): Boolean
 
+    /**
+     * Write data, suspending for channel window credit and transport backpressure.
+     *
+     * Successful completion means the transport writes completed, not that the remote
+     * application processed the data. Await an application response when that confirmation
+     * is required. Disconnecting the client can abort a suspended write.
+     */
     suspend fun write(data: ByteArray)
 
     suspend fun read(): ByteArray?

@@ -696,6 +696,10 @@ class SshClient private constructor(
 
     /**
      * Disconnect from the SSH server.
+     *
+     * Aborts outstanding writes and closes the transport. Await [SshSession.write] before
+     * disconnecting when local write completion matters. To confirm remote processing,
+     * wait for the corresponding application or protocol response before disconnecting.
      */
     suspend fun disconnect() {
         logger.info("Disconnecting")
