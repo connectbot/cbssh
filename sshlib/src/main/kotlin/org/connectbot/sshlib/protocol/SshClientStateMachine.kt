@@ -17,6 +17,8 @@
 
 package org.connectbot.sshlib.protocol
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.nsk.kstatemachine.event.Event
 import ru.nsk.kstatemachine.state.HistoryState
 import ru.nsk.kstatemachine.state.HistoryType
@@ -67,6 +69,13 @@ internal class SshClientStateMachine(
     private val nonKexBeforeInitialKexInit = SshFormalGuard.Fact(SshBooleanFact.NON_KEX_BEFORE_INITIAL_KEX_INIT)
     private var strictKexEnabled = false
     private var receivedNonKexBeforeInitialKexInit = false
+
+    /**
+     * Serializes whole events, including their suspending transition callbacks. The single-threaded
+     * dispatcher only serializes code between suspension points, so without this a second event could
+     * reach KStateMachine while a callback is suspended in a packet write and be queued as `PENDING`.
+     */
+    private val eventMutex = Mutex()
 
     private sealed class SshEvent : Event {
         object Connect : SshEvent()
@@ -598,8 +607,8 @@ internal class SshClientStateMachine(
 
     suspend fun receiveVersion(banner: IdBanner): Boolean = process(SshEvent.ReceiveVersion(banner))
 
-    suspend fun receiveKexInit(msg: SshMsgKexinit): Boolean {
-        if (!isWaitingForKexInit()) return false
+    suspend fun receiveKexInit(msg: SshMsgKexinit): Boolean = eventMutex.withLock {
+        if (!isWaitingForKexInit()) return@withLock false
 
         val initialExchange = !callbacks.isRekeying()
         val strictKexNegotiated = callbacks.receiveKexInit(msg, initialExchange)
@@ -608,7 +617,7 @@ internal class SshClientStateMachine(
             strictKexNegotiated -> SshEvent.ReceiveInitialStrictKexInit(msg)
             else -> SshEvent.ReceiveInitialNonStrictKexInit(msg)
         }
-        return process(event)
+        processLocked(event)
     }
 
     suspend fun receiveKexDhReply(msg: SshMsgKexdhReply): Boolean = process(SshEvent.ReceiveKex.DhReply(msg))
@@ -689,7 +698,9 @@ internal class SshClientStateMachine(
 
     internal fun formalModel(): SshStateMachineFormalModel = stateMachine.toSshFormalModel()
 
-    private suspend fun process(event: SshEvent): Boolean = stateMachine.processEvent(event) == ProcessingResult.PROCESSED
+    private suspend fun process(event: SshEvent): Boolean = eventMutex.withLock { processLocked(event) }
+
+    private suspend fun processLocked(event: SshEvent): Boolean = stateMachine.processEvent(event) == ProcessingResult.PROCESSED
 }
 
 internal interface SshClientCallbacks {
