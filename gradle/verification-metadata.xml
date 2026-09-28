@@ -72,6 +72,7 @@
          <trusted-key id="73976C9C39C1479B84E2641A5A68A2249128E2C6" group="com.google.crypto.tink" name="tink"/>
          <trusted-key id="7510899FD19227B38B6907B2B4D6B92E9CABB6C3" group="org.connectbot" name="jbcrypt"/>
          <trusted-key id="7616EB882DAF57A11477AAF559A252FB1199D873" group="com.google.code.findbugs" name="jsr305"/>
+         <trusted-key id="782AF7972653864E80AD3CFD20DBD25146A6FAF1" group="^org[.]kotlincrypto($|([.].*))" regex="true"/>
          <trusted-key id="7B121B76A7ED6CE6E60AD51784E913A8E3A748C0" group="org.bouncycastle"/>
          <trusted-key id="7B381D196BA74C9FA7CEEE84854D0560FEF4601F" group="asia.hombre"/>
          <trusted-key id="7B72C18D9C362314BF8E981B0CAEBC0883C5BB65" group="com.vanniktech"/>

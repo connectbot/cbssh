@@ -40,6 +40,8 @@ dependencies {
     implementation(libs.slf4j.api)
     implementation(libs.tink)
     implementation(libs.kyber)
+    // Override Kyber's transitive Keccak version to support Java 17.
+    implementation(libs.keccak)
     implementation(libs.jbcrypt)
 
     // Unit tests

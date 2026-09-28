@@ -8,7 +8,9 @@ kstatemachine = "0.38.1"
 ktor = "3.5.2"
 slf4j = "2.0.20"
 tink = "1.23.0"
-kyber = "2.0.1"
+kyber = "2.1.0"
+# Keccak 2.3.0 requires Java 21; retain Java 17 compatibility.
+keccak = { strictly = "2.1.1" }
 jbcrypt = "1.0.2"
 junit = "6.1.3"
 equalsverifier = "4.5.2"
@@ -33,6 +35,7 @@ ktor-network = { module = "io.ktor:ktor-network", version.ref = "ktor" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 tink = { module = "com.google.crypto.tink:tink", version.ref = "tink" }
 kyber = { module = "asia.hombre:kyber", version.ref = "kyber" }
+keccak = { module = "asia.hombre:keccak-jvm", version.ref = "keccak" }
 jbcrypt = { module = "org.connectbot:jbcrypt", version.ref = "jbcrypt" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
