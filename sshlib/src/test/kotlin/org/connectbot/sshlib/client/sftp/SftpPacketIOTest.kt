@@ -97,6 +97,47 @@ class SftpPacketIOTest {
     }
 
     @Test
+    fun `contiguous packets retain bounded read-only views with independent cursors`() = runBlocking {
+        val session = FakeSshSession()
+        val wire = packet(10, byteArrayOf(1, 2)) + packet(11, byteArrayOf(3))
+        session.enqueue(wire)
+        val io = SftpPacketIO(session)
+        val first = assertIs<SftpResult.Success<SftpRawPacket>>(io.readPacket()).value
+        val cursor = first.payloadBuffer
+        assertTrue(cursor.isReadOnly)
+        cursor.clear()
+        assertEquals(2, cursor.capacity())
+        cursor.get()
+        assertEquals(0, first.payloadBuffer.position())
+        val second = assertIs<SftpResult.Success<SftpRawPacket>>(io.readPacket()).value
+        assertContentEquals(byteArrayOf(3), second.payload)
+        wire[5] = 77 // Prove sharing; real input owners do not mutate retained packets.
+        assertEquals(77.toByte(), first.payloadBuffer.get(0))
+        val publicCopy = first.payload
+        publicCopy[0] = 9
+        assertEquals(77.toByte(), first.payloadBuffer.get(0))
+    }
+
+    @Test
+    fun `fragmented frame uses owned assembly and empty chunks are skipped`() = runBlocking {
+        val session = FakeSshSession()
+        val first = packet(103, byteArrayOf(1, 2, 3)).copyOfRange(0, 6)
+        val tail = byteArrayOf(2, 3)
+        session.enqueue(byteArrayOf())
+        session.enqueue(first)
+        session.enqueue(byteArrayOf())
+        session.enqueue(tail)
+        val packet = assertIs<SftpResult.Success<SftpRawPacket>>(SftpPacketIO(session).readPacket()).value
+        first.fill(0)
+        tail.fill(0)
+        val view = packet.payloadBuffer
+        view.clear()
+        assertTrue(view.isReadOnly)
+        assertEquals(3, view.capacity())
+        assertContentEquals(byteArrayOf(1, 2, 3), packet.payload)
+    }
+
+    @Test
     fun `writePacket serializes length type and payload`() = runBlocking {
         val session = FakeSshSession()
 

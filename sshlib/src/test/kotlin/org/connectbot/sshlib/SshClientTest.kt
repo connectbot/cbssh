@@ -416,16 +416,16 @@ class SshClientTest {
     fun `openSftp maps session open and subsystem failures`() = runTest {
         val connection = mockk<SshConnection>(relaxed = true)
         val client = connectedClient(connection, authenticated = true)
-        coEvery { connection.openSessionChannel() } returns null
+        coEvery { connection.openBufferedSessionChannel() } returns null
         assertIs<SftpResult.ProtocolError>(client.openSftp())
 
         val session = mockk<SessionChannel>(relaxed = true)
-        coEvery { connection.openSessionChannel() } returns session
+        coEvery { connection.openBufferedSessionChannel() } returns session
         coEvery { session.requestSubsystem("sftp") } returns false
         assertIs<SftpResult.ProtocolError>(client.openSftp())
         verify { session.close() }
 
-        coEvery { connection.openSessionChannel() } throws IllegalStateException("boom")
+        coEvery { connection.openBufferedSessionChannel() } throws IllegalStateException("boom")
         assertIs<SftpResult.IoError>(client.openSftp())
     }
 

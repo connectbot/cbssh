@@ -192,8 +192,8 @@ internal class SftpDispatcher(
                     }
 
                     // Extract request ID from first 4 bytes of payload
-                    val responsePayload = packet.payload
-                    if (responsePayload.size < 4) {
+                    val responsePayload = packet.payloadBuffer
+                    if (responsePayload.remaining() < 4) {
                         logger.warn("SFTP packet type {} with payload too short for request ID", packet.type)
                         continue
                     }
@@ -210,7 +210,7 @@ internal class SftpDispatcher(
                     val header = SftpFrameHeader.ResponseHeader(ByteBufferKaitaiStream(responsePayload))
                     header._read()
                     val requestId = header.requestId().toInt()
-                    val responsePacket = SftpRawPacket(packet.type, responsePayload.copyOfRange(4, responsePayload.size))
+                    val responsePacket = SftpRawPacket(packet.type, responsePayload.apply { position(header._io().pos().toInt()) }.slice())
 
                     val deferred = pending.remove(requestId)
                     if (deferred != null) {

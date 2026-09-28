@@ -40,6 +40,7 @@ import org.connectbot.sshlib.protocol.SshChannelEffect
 import org.connectbot.sshlib.protocol.SshChannelState
 import org.connectbot.sshlib.protocol.SshChannelStateMachine
 import org.slf4j.LoggerFactory
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 
@@ -55,6 +56,7 @@ class SessionChannel internal constructor(
     private val obscureKeystrokeTimingIntervalMs: Long = 20L,
     private val obfuscatorClockMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val obfuscatorRandom: Random = Random.Default,
+    private val bufferedStdout: Boolean = false,
     private val lifecycle: SshChannelStateMachine = SshChannelStateMachine(SshChannelState.OPEN),
 ) : SshSession {
     companion object {
@@ -72,19 +74,44 @@ class SessionChannel internal constructor(
     private val stderrIngress = Channel<ByteArray>(Channel.UNLIMITED)
     private val extendedDataIngress = Channel<Pair<Int, ByteArray>>(Channel.UNLIMITED)
     private val _stdout = Channel<ByteArray>(Channel.RENDEZVOUS)
+    private val stdoutBufferIngress = Channel<ByteBuffer>(Channel.UNLIMITED)
+    private val stdoutBufferConsumed = Channel<Unit>(1)
+    private val stdoutBuffers = Channel<ByteBuffer>(Channel.RENDEZVOUS, onUndeliveredElement = {
+        stdoutBufferConsumed.trySend(Unit)
+    })
+    private var stdoutAdapterJob: Job? = null
+    private val arrayStdout by lazy {
+        if (bufferedStdout) {
+            stdoutAdapterJob = connectionScope.launch {
+                try {
+                    for (buffer in stdoutBuffers) {
+                        _stdout.send(buffer.toByteArray())
+                        stdoutBufferConsumed.trySend(Unit)
+                    }
+                } finally {
+                    _stdout.close()
+                }
+            }
+        }
+        _stdout
+    }
     private val _stderr = Channel<ByteArray>(Channel.RENDEZVOUS)
     private val _extendedData = Channel<Pair<Int, ByteArray>>(Channel.RENDEZVOUS)
 
     @Volatile private var inboundDeliveryOpen = true
 
     private val stdoutDeliveryJob = connectionScope.launch {
-        deliverData(stdoutIngress, _stdout) { it.size }
+        if (bufferedStdout) {
+            deliverData(stdoutBufferIngress, stdoutBuffers, { it.remaining() }) { stdoutBufferConsumed.receive() }
+        } else {
+            deliverData(stdoutIngress, _stdout, { it.size })
+        }
     }
     private val stderrDeliveryJob = connectionScope.launch {
-        deliverData(stderrIngress, _stderr) { it.size }
+        deliverData(stderrIngress, _stderr, { it.size })
     }
     private val extendedDeliveryJob = connectionScope.launch {
-        deliverData(extendedDataIngress, _extendedData) { it.second.size }
+        deliverData(extendedDataIngress, _extendedData, { it.second.size })
     }
 
     // AutoCloseable.close() cannot await the owner. Publish the local API close request
@@ -92,7 +119,7 @@ class SessionChannel internal constructor(
     @Volatile private var closeRequested = false
     override val isOpen: Boolean get() = !closeRequested && lifecycle.isOpen
     override val remoteChannelNumber: Int get() = _remoteChannelNumber
-    override val stdout: ReceiveChannel<ByteArray> get() = _stdout
+    override val stdout: ReceiveChannel<ByteArray> get() = arrayStdout
     override val stderr: ReceiveChannel<ByteArray> get() = _stderr
 
     private val _exitInfo = CompletableDeferred<SessionExit?>()
@@ -122,10 +149,32 @@ class SessionChannel internal constructor(
     private val obfuscationActive: Boolean
         get() = ptyGranted && canSendChaff && obscureKeystrokeTimingIntervalMs > 0
 
+    internal suspend fun onData(data: ByteString) {
+        if (bufferedStdout) onData(data.asReadOnlyBuffer()) else onData(data.data())
+    }
+
     internal suspend fun onData(data: ByteArray) {
+        if (bufferedStdout) {
+            onData(ByteBuffer.wrap(data).asReadOnlyBuffer())
+        } else {
+            receiveStdout(data.size) { stdoutIngress.trySend(data).isSuccess }
+        }
+    }
+
+    // Packet plaintext is owned and never recycled while these views are retained.
+    internal suspend fun onData(data: ByteBuffer) {
+        if (!bufferedStdout) {
+            onData(data.toByteArray())
+            return
+        }
+        val view = data.slice().asReadOnlyBuffer()
+        receiveStdout(view.remaining()) { stdoutBufferIngress.trySend(view).isSuccess }
+    }
+
+    private suspend fun receiveStdout(size: Int, enqueue: () -> Boolean) {
         if (!lifecycle.receiveData {
-                window.consumeLocal(data.size)
-                if (stdoutIngress.trySend(data).isFailure) {
+                window.consumeLocal(size)
+                if (!enqueue()) {
                     throw org.connectbot.sshlib.SshException("Received data for a closed stdout stream")
                 }
             }
@@ -154,11 +203,14 @@ class SessionChannel internal constructor(
         ingress: ReceiveChannel<T>,
         output: Channel<T>,
         sizeOf: (T) -> Int,
+        awaitConsumption: suspend () -> Unit = {},
     ) {
         try {
             for (value in ingress) {
+                val size = sizeOf(value)
                 output.send(value)
-                val adjust = window.releaseLocal(sizeOf(value))
+                awaitConsumption()
+                val adjust = if (size == 0) 0 else window.releaseLocal(size)
                 if (inboundDeliveryOpen && adjust > 0) {
                     connection.sendWindowAdjust(_remoteChannelNumber, adjust)
                 }
@@ -208,6 +260,7 @@ class SessionChannel internal constructor(
     private fun finishInboundDelivery() {
         inboundDeliveryOpen = false
         stdoutIngress.close()
+        stdoutBufferIngress.close()
         stderrIngress.close()
         extendedDataIngress.close()
     }
@@ -215,6 +268,9 @@ class SessionChannel internal constructor(
     private fun abortInboundDelivery() {
         finishInboundDelivery()
         stdoutDeliveryJob.cancel()
+        stdoutAdapterJob?.cancel()
+        stdoutBuffers.close()
+        stdoutBufferConsumed.close()
         stderrDeliveryJob.cancel()
         extendedDeliveryJob.cancel()
         _stdout.close()
@@ -355,7 +411,17 @@ class SessionChannel internal constructor(
         }
     }
 
-    override suspend fun read(): ByteArray? = _stdout.receiveCatching().getOrNull()
+    override suspend fun read(): ByteArray? = if (bufferedStdout) {
+        readBuffer()?.toByteArray()
+    } else {
+        _stdout.receiveCatching().getOrNull()
+    }
+
+    internal suspend fun readBuffer(): ByteBuffer? = if (bufferedStdout) {
+        stdoutBuffers.receiveCatching().getOrNull()?.also { stdoutBufferConsumed.trySend(Unit) }
+    } else {
+        _stdout.receiveCatching().getOrNull()?.let { ByteBuffer.wrap(it).asReadOnlyBuffer() }
+    }
 
     override suspend fun readExtended(): Pair<Int, ByteArray>? = _extendedData.receiveCatching().getOrNull()
 

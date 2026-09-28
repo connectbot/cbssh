@@ -27,6 +27,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.SshSession
+import org.connectbot.sshlib.client.SessionChannel
+import org.connectbot.sshlib.client.toByteArray
 import org.connectbot.sshlib.protocol.SftpFrameHeader
 import java.nio.ByteBuffer
 
@@ -136,9 +138,7 @@ internal class SftpPacketIO(private val session: SshSession) : SftpPacketTranspo
         return write.receipt
     }
 
-    private var bufferedBytes = ByteArray(0)
-    private var bufferedOffset = 0
-    private var bufferedLength = 0
+    private var buffered = ByteBuffer.allocate(0).asReadOnlyBuffer()
 
     /**
      * Read a complete SFTP packet. Blocks (suspends) until enough data arrives.
@@ -159,7 +159,8 @@ internal class SftpPacketIO(private val session: SshSession) : SftpPacketTranspo
             val body = readExact(lengthHeader.length().toInt())
             val header = SftpFrameHeader.BodyHeader(ByteBufferKaitaiStream(body))
             header._read()
-            SftpResult.Success(SftpRawPacket(header.packetType(), body.copyOfRange(1, body.size)))
+            body.position(header._io().pos().toInt())
+            SftpResult.Success(SftpRawPacket(header.packetType(), body.slice().asReadOnlyBuffer()))
         } catch (e: ChannelClosedException) {
             SftpResult.IoError(e)
         } catch (e: Exception) {
@@ -195,37 +196,33 @@ internal class SftpPacketIO(private val session: SshSession) : SftpPacketTranspo
      * and translate to [SftpResult.IoError]. Kept private so the throw
      * doesn't leak past the API surface.
      */
-    private suspend fun readExact(count: Int): ByteArray {
-        val result = ByteArray(count)
-        var filled = 0
-
-        // Drain any leftover buffered data first
-        if (bufferedLength > 0) {
-            val toCopy = minOf(count, bufferedLength)
-            System.arraycopy(bufferedBytes, bufferedOffset, result, 0, toCopy)
-            bufferedOffset += toCopy
-            bufferedLength -= toCopy
-            filled += toCopy
-        }
-
-        // Read from the session until we have enough
-        while (filled < count) {
-            val data = session.read()
+    private suspend fun nextChunk(): ByteBuffer {
+        while (!buffered.hasRemaining()) {
+            buffered = (if (session is SessionChannel) session.readBuffer() else session.read()?.let { ByteBuffer.wrap(it) })
                 ?: throw ChannelClosedException("SSH channel closed before complete SFTP packet")
-
-            val toCopy = minOf(count - filled, data.size)
-            System.arraycopy(data, 0, result, filled, toCopy)
-            filled += toCopy
-
-            // Buffer any leftover bytes for the next readExact call
-            if (toCopy < data.size) {
-                bufferedBytes = data
-                bufferedOffset = toCopy
-                bufferedLength = data.size - toCopy
-            }
         }
+        return buffered
+    }
 
-        return result
+    private suspend fun readExact(count: Int): ByteBuffer {
+        val chunk = nextChunk()
+        if (chunk.remaining() >= count) {
+            val view = chunk.slice().asReadOnlyBuffer()
+            view.limit(count)
+            chunk.position(chunk.position() + count)
+            return view.slice()
+        }
+        val result = ByteBuffer.allocate(count)
+        while (result.hasRemaining()) {
+            val input = nextChunk()
+            val part = input.duplicate()
+            val size = minOf(input.remaining(), result.remaining())
+            part.limit(part.position() + size)
+            result.put(part)
+            input.position(input.position() + size)
+        }
+        result.flip()
+        return result.asReadOnlyBuffer()
     }
 }
 
@@ -239,9 +236,15 @@ internal class ChannelClosedException(message: String) : Exception(message)
 /**
  * Raw SFTP packet with type byte and payload (without the length prefix).
  */
-internal data class SftpRawPacket(val type: Int, val payload: ByteArray) {
-    override fun equals(other: Any?): Boolean = other is SftpRawPacket && type == other.type && payload.contentEquals(other.payload)
-    override fun hashCode(): Int = 31 * type + payload.contentHashCode()
+internal class SftpRawPacket(val type: Int, payload: ByteBuffer) {
+    private val bytes = payload.slice().asReadOnlyBuffer()
+    constructor(type: Int, payload: ByteArray) : this(type, ByteBuffer.wrap(payload))
+
+    // Each decoder owns its cursor; retained responses never share mutable positions.
+    val payloadBuffer: ByteBuffer get() = bytes.asReadOnlyBuffer()
+    val payload: ByteArray get() = bytes.toByteArray()
+    override fun equals(other: Any?): Boolean = other is SftpRawPacket && type == other.type && bytes == other.bytes
+    override fun hashCode(): Int = 31 * type + bytes.hashCode()
 }
 
 internal class SftpProtocolException(message: String) : Exception(message)

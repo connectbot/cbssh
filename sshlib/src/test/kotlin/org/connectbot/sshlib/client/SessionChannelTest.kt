@@ -24,7 +24,9 @@ import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.connectbot.sshlib.SshException
 import org.junit.jupiter.api.Assertions.assertArrayEquals
@@ -32,6 +34,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.nio.ByteBuffer
 import kotlin.test.assertFailsWith
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -40,6 +43,7 @@ class SessionChannelTest {
     private fun createChannel(
         connection: SshConnection = mockk(relaxed = true),
         initialWindowSize: Int = 64 * 1024,
+        bufferedStdout: Boolean = false,
         connectionScope: CoroutineScope = CoroutineScope(UnconfinedTestDispatcher()),
     ): Pair<SessionChannel, SshConnection> {
         val channel = SessionChannel(
@@ -50,6 +54,7 @@ class SessionChannelTest {
             maxPacketSize = 32 * 1024,
             remoteWindowSizeInitial = 64 * 1024L,
             initialWindowSize = initialWindowSize,
+            bufferedStdout = bufferedStdout,
         )
         return channel to connection
     }
@@ -107,6 +112,73 @@ class SessionChannelTest {
         channel.resizeTerminal(80, 24, 0, 0)
 
         assertEquals(1, channelSlot.captured)
+    }
+
+    @Test
+    fun `buffer reads preserve bounds ownership and credit until consumption`() = runTest {
+        val (channel, conn) = createChannel(initialWindowSize = 128, bufferedStdout = true)
+        val backing = ByteArray(104) { it.toByte() }
+        val input = ByteBuffer.wrap(backing).apply {
+            position(2)
+            limit(102)
+        }
+        channel.onData(input)
+        input.clear()
+        coVerify(exactly = 0) { conn.sendWindowAdjust(any(), any()) }
+        val received = checkNotNull(channel.readBuffer())
+        assertTrue(received.isReadOnly)
+        received.clear()
+        assertEquals(100, received.capacity())
+        assertEquals(2.toByte(), received.get(0))
+        // An alias proves this handoff did not materialize another array. Production
+        // plaintext remains immutable; only this test deliberately modifies its owner.
+        received.position(received.limit())
+        backing[2] = 77
+        assertEquals(77.toByte(), received.get(0))
+        coVerify { conn.sendWindowAdjust(1, any()) }
+        channel.onEof()
+        assertEquals(null, channel.readBuffer())
+    }
+
+    @Test
+    fun `cancelled buffer receiver releases undelivered credit without stalling following reads`() = runTest {
+        val (channel, conn) = createChannel(initialWindowSize = 128, bufferedStdout = true)
+        val read = async { channel.readBuffer() }
+        runCurrent()
+        channel.onData(ByteArray(100))
+        read.cancel()
+        runCurrent()
+        coVerify { conn.sendWindowAdjust(1, 100) }
+        channel.onData(byteArrayOf(7))
+        assertEquals(7.toByte(), checkNotNull(channel.readBuffer()).get())
+        channel.onDisconnected()
+        assertEquals(null, channel.readBuffer())
+    }
+
+    @Test
+    fun `buffered stdout array adapter withholds credit until public receive`() = runTest {
+        val (channel, conn) = createChannel(initialWindowSize = 128, bufferedStdout = true)
+        val stdout = channel.stdout
+        channel.onData(ByteArray(100) { 7 })
+        coVerify(exactly = 0) { conn.sendWindowAdjust(any(), any()) }
+        assertArrayEquals(ByteArray(100) { 7 }, stdout.receive())
+        coVerify { conn.sendWindowAdjust(1, any()) }
+        channel.onClose()
+        assertTrue(stdout.receiveCatching().isClosed)
+    }
+
+    @Test
+    fun `buffered read returns a detached public array and close retains pending views`() = runTest {
+        val (channel, _) = createChannel(bufferedStdout = true)
+        val backing = byteArrayOf(1, 2, 3)
+        channel.onData(ByteBuffer.wrap(backing))
+        val copied = checkNotNull(channel.read())
+        copied[0] = 9
+        assertEquals(1.toByte(), backing[0])
+        channel.onData(ByteBuffer.wrap(byteArrayOf(4, 5)))
+        channel.onClose()
+        assertArrayEquals(byteArrayOf(4, 5), checkNotNull(channel.readBuffer()).toByteArray())
+        assertEquals(null, channel.readBuffer())
     }
 
     @Test

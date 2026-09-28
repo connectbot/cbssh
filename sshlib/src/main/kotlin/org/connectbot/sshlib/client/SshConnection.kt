@@ -2479,7 +2479,7 @@ class SshConnection(
                     val msg = packet.channelData()
                     val recipientChannel = msg.recipientChannel().toInt()
                     when (val entry = channelRegistry.findByLocalRecipient(recipientChannel)) {
-                        is SshChannelRegistry.Entry.Established.Session -> entry.channel.onData(msg.data().data())
+                        is SshChannelRegistry.Entry.Established.Session -> entry.channel.onData(msg.data())
                         is SshChannelRegistry.Entry.Established.Agent -> entry.channel.handleData(msg.data().data())
                         is SshChannelRegistry.Entry.Established.Forwarding -> entry.channel.onData(msg.data().data())
                         null -> throw ProtocolViolationException("Channel data for unknown channel $recipientChannel")
@@ -3119,7 +3119,11 @@ class SshConnection(
     suspend fun openSessionChannel(
         initialWindowSize: Int = sessionWindowSize,
         maxPacketSize: Int = 32 * 1024,
-    ): SessionChannel? {
+    ): SessionChannel? = openSessionChannel(initialWindowSize, maxPacketSize, bufferedStdout = false)
+
+    internal suspend fun openBufferedSessionChannel(): SessionChannel? = openSessionChannel(sessionWindowSize, 32 * 1024, bufferedStdout = true)
+
+    private suspend fun openSessionChannel(initialWindowSize: Int, maxPacketSize: Int, bufferedStdout: Boolean): SessionChannel? {
         val localChannelNumber = allocateChannelNumber()
 
         logger.info("Opening session channel (local=$localChannelNumber)")
@@ -3150,6 +3154,7 @@ class SshConnection(
                         remoteMaxPacketSize,
                         remoteWindowSizeInitial = remoteWindow,
                         initialWindowSize = initialWindowSize,
+                        bufferedStdout = bufferedStdout,
                         canSendChaff = serverSupportsPing,
                         obscureKeystrokeTimingIntervalMs = obscureKeystrokeTimingIntervalMs,
                         lifecycle = lifecycle,

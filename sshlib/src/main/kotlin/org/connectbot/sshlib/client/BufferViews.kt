@@ -15,19 +15,12 @@
  * limitations under the License.
  */
 
-package org.connectbot.sshlib.client.sftp
+package org.connectbot.sshlib.client
 
-import nl.jqno.equalsverifier.EqualsVerifier
-import org.junit.jupiter.api.Test
+import org.connectbot.sshlib.protocol.ByteString
 import java.nio.ByteBuffer
 
-class SftpRawPacketTest {
+internal fun ByteBuffer.toByteArray(): ByteArray = ByteArray(remaining()).also { duplicate().get(it) }
 
-    @Test
-    fun `SftpRawPacket equals and hashCode`() {
-        EqualsVerifier.forClass(SftpRawPacket::class.java)
-            .withNonnullFields("bytes")
-            .withPrefabValues(ByteBuffer::class.java, ByteBuffer.wrap(byteArrayOf(1, 2, 3)), ByteBuffer.wrap(byteArrayOf(4, 5, 6)))
-            .verify()
-    }
-}
+// Stock Kaitai owns the parsed array; the handoff adds no second payload copy.
+internal fun ByteString.asReadOnlyBuffer(): ByteBuffer = ByteBuffer.wrap(data()).asReadOnlyBuffer()

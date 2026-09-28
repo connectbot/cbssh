@@ -131,6 +131,31 @@ class SftpClientImplTest {
     }
 
     @Test
+    fun `buffer DATA decoding is bounded and preserves EOF and malformed errors`() = runBlocking {
+        for (data in listOf(byteArrayOf(), byteArrayOf(1, 2, 3))) {
+            val client = createClient(FakeSshSession(responseFor = { _, _ -> response(SSH_FXP_DATA, stringPayload(data)) })) as SftpClientImpl
+            val view = checkNotNull(assertSuccess(client.readBuffer(SftpFileHandle(byteArrayOf(1)), 0, 3)))
+            assertTrue(view.isReadOnly)
+            view.clear()
+            assertEquals(data.size, view.capacity())
+            assertContentEquals(data, ByteArray(view.remaining()).also(view::get))
+            client.close()
+        }
+        for (length in listOf(-1, Int.MAX_VALUE, 4)) {
+            val client = createClient(
+                FakeSshSession(responseFor = { _, _ ->
+                    response(SSH_FXP_DATA, ByteBuffer.allocate(7).putInt(length).put(byteArrayOf(1, 2, 3)).array())
+                }),
+            ) as SftpClientImpl
+            assertIs<SftpResult.ProtocolError>(client.readBuffer(SftpFileHandle(byteArrayOf(1)), 0, 3))
+            client.close()
+        }
+        val client = createClient(FakeSshSession(responseFor = { _, _ -> response(SSH_FXP_STATUS, statusPayload(SftpStatusCode.EOF)) })) as SftpClientImpl
+        assertEquals(null, assertSuccess(client.readBuffer(SftpFileHandle(byteArrayOf(1)), 0, 3)))
+        client.close()
+    }
+
+    @Test
     fun `file operations map successful responses`() = runBlocking {
         val session = FakeSshSession(
             responseFor = { type, _ ->
