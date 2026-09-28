@@ -3,6 +3,7 @@
    <configuration>
       <verify-metadata>true</verify-metadata>
       <verify-signatures>true</verify-signatures>
+      <keyring-format>armored</keyring-format>
       <trusted-keys>
          <trusted-key id="015479E1055341431B4545AB72475FD306B9CAB7" group="com.googlecode.javaewah" name="JavaEWAH"/>
          <trusted-key id="03C123038C20AAE9E286C857479D601F3A7B5C1A" group="^com[.]github[.]ajalt($|([.].*))" regex="true"/>
