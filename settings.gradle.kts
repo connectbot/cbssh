@@ -6,7 +6,13 @@ pluginManagement {
                 includeGroup("com.vanniktech")
             }
         }
-        gradlePluginPortal()
+        gradlePluginPortal {
+            content {
+                // Resolve the publishing plugin and its implementation only from Maven Central.
+                excludeGroup("com.vanniktech.maven.publish")
+                excludeGroup("com.vanniktech")
+            }
+        }
     }
 }
 
