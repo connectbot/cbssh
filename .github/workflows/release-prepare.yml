@@ -12,7 +12,7 @@ jobs:
   prepare:
     name: Prepare release pull request
     if: github.event.label.name == 'release:prepare'
-    uses: connectbot/release-action/.github/workflows/prepare-release.yml@851920620b16b907783a16c7f93d984bbda1d2eb # main
+    uses: connectbot/release-action/.github/workflows/prepare-release.yml@2085a1d6887933a5e65e1007dd446bb07b3b6067 # main
     with:
       tag_prefix: "v"
       gradle_no_push_prop: cbssh.release.noPush
