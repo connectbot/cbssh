@@ -185,6 +185,7 @@ class SshClient private constructor(
             obscureKeystrokeTimingIntervalMs = config.obscureKeystrokeTimingIntervalMs,
         )
         sshConnection.autoDisconnectOnLastChannelClose = config.autoDisconnectOnLastChannelClose
+        sshConnection.sessionWindowSize = config.sessionWindowSize
         val result = sshConnection.connect()
 
         if (result is ConnectResult.Success) {

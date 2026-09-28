@@ -623,6 +623,7 @@ package org.connectbot.sshlib {
     method @InaccessibleFromKotlin public boolean getPreferPasswordAuth();
     method @InaccessibleFromKotlin public long getRekeyBytesLimit();
     method @InaccessibleFromKotlin public long getRekeyIntervalMs();
+    method @InaccessibleFromKotlin public int getSessionWindowSize();
     method @InaccessibleFromKotlin public org.connectbot.sshlib.transport.TransportFactory getTransportFactory();
     property public boolean autoDisconnectOnLastChannelClose;
     property public String clientVersion;
@@ -635,6 +636,7 @@ package org.connectbot.sshlib {
     property public boolean preferPasswordAuth;
     property public long rekeyBytesLimit;
     property public long rekeyIntervalMs;
+    property public int sessionWindowSize;
     property public org.connectbot.sshlib.transport.TransportFactory transportFactory;
     field public static final org.connectbot.sshlib.SshClientConfig.Companion Companion;
   }
@@ -657,6 +659,7 @@ package org.connectbot.sshlib {
     method @InaccessibleFromKotlin public boolean getPreferPasswordAuth();
     method @InaccessibleFromKotlin public long getRekeyBytesLimit();
     method @InaccessibleFromKotlin public long getRekeyIntervalMs();
+    method @InaccessibleFromKotlin public int getSessionWindowSize();
     method @InaccessibleFromKotlin public org.connectbot.sshlib.transport.TransportFactory? getTransportFactory();
     method @InaccessibleFromKotlin public void setAutoDisconnectOnLastChannelClose(boolean);
     method @InaccessibleFromKotlin public void setClientVersion(java.lang.String);
@@ -673,6 +676,7 @@ package org.connectbot.sshlib {
     method @InaccessibleFromKotlin public void setPreferPasswordAuth(boolean);
     method @InaccessibleFromKotlin public void setRekeyBytesLimit(long);
     method @InaccessibleFromKotlin public void setRekeyIntervalMs(long);
+    method @InaccessibleFromKotlin public void setSessionWindowSize(int);
     method @InaccessibleFromKotlin public void setTransportFactory(org.connectbot.sshlib.transport.TransportFactory?);
     property public boolean autoDisconnectOnLastChannelClose;
     property public String clientVersion;
@@ -689,6 +693,7 @@ package org.connectbot.sshlib {
     property public boolean preferPasswordAuth;
     property public long rekeyBytesLimit;
     property public long rekeyIntervalMs;
+    property public int sessionWindowSize;
     property public org.connectbot.sshlib.transport.TransportFactory? transportFactory;
   }
 

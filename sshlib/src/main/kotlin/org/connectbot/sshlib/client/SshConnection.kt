@@ -257,6 +257,9 @@ class SshConnection(
 ) {
     internal var autoDisconnectOnLastChannelClose: Boolean = true
 
+    /** Default receive window for [openSessionChannel], set from `SshClientConfig.sessionWindowSize`. */
+    internal var sessionWindowSize: Int = 64 * 1024
+
     companion object {
         private val logger = LoggerFactory.getLogger(SshConnection::class.java)
         private const val KEX_EXT_INFO_C = "ext-info-c"
@@ -3020,7 +3023,7 @@ class SshConnection(
      * @return SessionChannel instance if successful, null otherwise
      */
     suspend fun openSessionChannel(
-        initialWindowSize: Int = 64 * 1024,
+        initialWindowSize: Int = sessionWindowSize,
         maxPacketSize: Int = 32 * 1024,
     ): SessionChannel? {
         val localChannelNumber = allocateChannelNumber()

@@ -59,6 +59,7 @@ class SshClientConfig private constructor(
     val rekeyBytesLimit: Long,
     val obscureKeystrokeTimingIntervalMs: Long,
     val autoDisconnectOnLastChannelClose: Boolean,
+    val sessionWindowSize: Int,
 ) {
     class Builder {
         /**
@@ -134,6 +135,14 @@ class SshClientConfig private constructor(
          */
         var autoDisconnectOnLastChannelClose: Boolean = true
 
+        /**
+         * Receive window, in bytes, for session channels: shells, commands and subsystems such as
+         * SFTP. A channel moves at most one window of data per network round trip, so a larger
+         * window speeds up bulk transfers on slower links. Each channel may buffer up to this much
+         * unread data. OpenSSH and libssh2 use 2 MiB. Default: 64 KiB.
+         */
+        var sessionWindowSize: Int = 64 * 1024
+
         fun build(): SshClientConfig {
             val factory = transportFactory ?: run {
                 require(host.isNotBlank()) { "Host must be specified when using default TCP transport" }
@@ -143,6 +152,7 @@ class SshClientConfig private constructor(
             require(obscureKeystrokeTimingIntervalMs >= 0) {
                 "obscureKeystrokeTimingIntervalMs must be non-negative"
             }
+            require(sessionWindowSize > 0) { "sessionWindowSize must be positive" }
 
             val verifier = hostKeyVerifier
             requireNotNull(verifier) { "hostKeyVerifier must be set" }
@@ -166,6 +176,7 @@ class SshClientConfig private constructor(
                 rekeyBytesLimit,
                 obscureKeystrokeTimingIntervalMs,
                 autoDisconnectOnLastChannelClose,
+                sessionWindowSize,
             )
         }
     }

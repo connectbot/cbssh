@@ -353,6 +353,36 @@ class SshClientTest {
     }
 
     @Test
+    fun `SshClientConfig defaults session window to sixty-four kibibytes`() {
+        val config = SshClientConfig {
+            host = "example.com"
+            hostKeyVerifier = acceptAllVerifier
+        }
+        assertEquals(64 * 1024, config.sessionWindowSize)
+    }
+
+    @Test
+    fun `SshClientConfig custom session window is applied`() {
+        val config = SshClientConfig {
+            host = "example.com"
+            hostKeyVerifier = acceptAllVerifier
+            sessionWindowSize = 2 * 1024 * 1024
+        }
+        assertEquals(2 * 1024 * 1024, config.sessionWindowSize)
+    }
+
+    @Test
+    fun `SshClientConfig rejects non-positive session window`() {
+        assertFailsWith<IllegalArgumentException> {
+            SshClientConfig {
+                host = "example.com"
+                hostKeyVerifier = acceptAllVerifier
+                sessionWindowSize = 0
+            }
+        }
+    }
+
+    @Test
     fun `SshClientConfig rejects negative keystroke obfuscation interval`() {
         assertFailsWith<IllegalArgumentException> {
             SshClientConfig {
