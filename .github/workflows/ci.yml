@@ -2,7 +2,7 @@
 name: Continuous Integration
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!renovate/**']
     tags: ['v*.*.*']
   pull_request:
     branches: [main, 'release/**']
