@@ -71,7 +71,12 @@ internal object OpenSshKeyReader {
             val salt = optBuf.readByteString()
             val rounds = optBuf.int
             val passwordBytes = passphrase.toByteArray(Charsets.UTF_8)
-            privateSection = KeyDecryption.decryptOpenSsh(privateSection, passwordBytes, salt, rounds, cipherName)
+            val tagLength = KeyDecryption.openSshAuthTagLength(cipherName)
+            if (buf.remaining() < tagLength) {
+                throw SshException("OpenSSH key is missing its authentication tag")
+            }
+            val authTag = ByteArray(tagLength).also { buf.get(it) }
+            privateSection = KeyDecryption.decryptOpenSsh(privateSection, passwordBytes, salt, rounds, cipherName, authTag)
         } else if (cipherName != "none" || kdfName != "none") {
             throw SshException("Unsupported encryption: cipher=$cipherName, kdf=$kdfName")
         }

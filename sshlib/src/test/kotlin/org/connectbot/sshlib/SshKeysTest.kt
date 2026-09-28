@@ -19,6 +19,8 @@ package org.connectbot.sshlib
 
 import org.junit.jupiter.api.Test
 import java.security.Security
+import java.util.Base64
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
@@ -28,6 +30,14 @@ class SshKeysTest {
 
     private fun readKey(resourcePath: String): String = javaClass.getResourceAsStream("/keys/$resourcePath")!!
         .bufferedReader().readText()
+
+    /** Decodes an OpenSSH private key PEM, lets [change] edit the raw bytes, and re-encodes it. */
+    private fun rewrapOpenSsh(pem: String, change: (ByteArray) -> ByteArray): String {
+        val body = pem.lines().filter { it.isNotBlank() && !it.startsWith("-----") }.joinToString("")
+        val changed = Base64.getEncoder().encodeToString(change(Base64.getDecoder().decode(body)))
+        return "-----BEGIN OPENSSH PRIVATE KEY-----\n" + changed.chunked(70).joinToString("\n") +
+            "\n-----END OPENSSH PRIVATE KEY-----\n"
+    }
 
     @Test
     fun `decodePemPrivateKey Ed25519 OpenSSH format`() {
@@ -68,6 +78,41 @@ class SshKeysTest {
     fun `decodePemPrivateKey RSA encrypted`() {
         val keyPair = SshKeys.decodePemPrivateKey(readKey("rsa_encrypted"), "testpass")
         assertNotNull(keyPair.public)
+    }
+
+    @Test
+    fun `decodePemPrivateKey reads OpenSSH keys encrypted with AES-GCM`() {
+        for (name in listOf("ed25519_aes256_gcm", "ecdsa256_aes128_gcm", "rsa_aes256_gcm")) {
+            val keyPair = SshKeys.decodePemPrivateKey(readKey(name), "testpass")
+            val expectedBlob = Base64.getDecoder().decode(readKey("$name.pub").trim().split(" ")[1])
+            assertContentEquals(expectedBlob, SshSigning.encodePublicKeyBlob(keyPair.public), name)
+        }
+    }
+
+    @Test
+    fun `decodePemPrivateKey rejects a wrong passphrase for an AES-GCM key`() {
+        assertFailsWith<SshException> {
+            SshKeys.decodePemPrivateKey(readKey("ed25519_aes256_gcm"), "wrongpass")
+        }
+    }
+
+    @Test
+    fun `decodePemPrivateKey rejects an AES-GCM key whose tag was changed`() {
+        // The 16-byte tag is the last thing in the key blob.
+        val tampered = rewrapOpenSsh(readKey("ed25519_aes256_gcm")) { bytes ->
+            bytes.copyOf().also { it[it.size - 1] = (it[it.size - 1].toInt() xor 1).toByte() }
+        }
+        assertFailsWith<SshException> {
+            SshKeys.decodePemPrivateKey(tampered, "testpass")
+        }
+    }
+
+    @Test
+    fun `decodePemPrivateKey rejects an AES-GCM key without its tag`() {
+        val truncated = rewrapOpenSsh(readKey("ed25519_aes256_gcm")) { it.copyOfRange(0, it.size - 16) }
+        assertFailsWith<SshException> {
+            SshKeys.decodePemPrivateKey(truncated, "testpass")
+        }
     }
 
     @Test

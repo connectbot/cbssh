@@ -19,15 +19,28 @@ package org.connectbot.sshlib.crypto
 
 import org.connectbot.sshlib.SshException
 import org.mindrot.jbcrypt.BCrypt
+import java.security.GeneralSecurityException
 import java.security.MessageDigest
 import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 private const val AES_CBC_NO_PADDING = "AES/CBC/NoPadding"
 private const val AES_CTR_NO_PADDING = "AES/CTR/NoPadding"
+private const val AES_GCM_NO_PADDING = "AES/GCM/NoPadding"
+private const val GCM_TAG_LENGTH = 16
 
 internal object KeyDecryption {
+
+    /**
+     * Length of the authentication tag OpenSSH writes after the encrypted private section, outside
+     * its length-prefixed string. Only the AEAD ciphers have one.
+     */
+    fun openSshAuthTagLength(cipherName: String): Int = when (cipherName.lowercase()) {
+        "aes128-gcm@openssh.com", "aes256-gcm@openssh.com" -> GCM_TAG_LENGTH
+        else -> 0
+    }
 
     fun decryptOpenSsh(
         data: ByteArray,
@@ -35,6 +48,7 @@ internal object KeyDecryption {
         salt: ByteArray,
         rounds: Int,
         cipherName: String,
+        authTag: ByteArray = ByteArray(0),
     ): ByteArray {
         val (jcaCipher, keySize, ivSize) = when (cipherName.lowercase()) {
             "aes256-ctr" -> Triple(AES_CTR_NO_PADDING, 32, 16)
@@ -43,6 +57,8 @@ internal object KeyDecryption {
             "aes128-cbc" -> Triple(AES_CBC_NO_PADDING, 16, 16)
             "aes192-ctr" -> Triple(AES_CTR_NO_PADDING, 24, 16)
             "aes192-cbc" -> Triple(AES_CBC_NO_PADDING, 24, 16)
+            "aes128-gcm@openssh.com" -> Triple(AES_GCM_NO_PADDING, 16, 12)
+            "aes256-gcm@openssh.com" -> Triple(AES_GCM_NO_PADDING, 32, 12)
             else -> throw SshException("Unsupported OpenSSH cipher: $cipherName")
         }
 
@@ -53,6 +69,16 @@ internal object KeyDecryption {
         val iv = keyAndIv.copyOfRange(keySize, keySize + ivSize)
 
         val cipher = Cipher.getInstance(jcaCipher)
+        if (jcaCipher == AES_GCM_NO_PADDING) {
+            // OpenSSH encrypts the section once with the derived nonce and no associated data.
+            require(authTag.size == GCM_TAG_LENGTH) { "AES-GCM needs a $GCM_TAG_LENGTH-byte tag" }
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_LENGTH * 8, iv))
+            return try {
+                cipher.doFinal(data + authTag)
+            } catch (e: GeneralSecurityException) {
+                throw SshException("Decryption failed (wrong passphrase or corrupted key)", e)
+            }
+        }
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
         return cipher.doFinal(data)
     }
