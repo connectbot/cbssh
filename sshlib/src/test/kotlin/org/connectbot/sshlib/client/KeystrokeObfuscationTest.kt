@@ -111,7 +111,7 @@ class KeystrokeObfuscationTest {
         advanceUntilIdle()
 
         coVerify(exactly = 0) { conn.sendChaff() }
-        coVerify(exactly = 1) { conn.sendChannelData(any(), any()) }
+        coVerify(exactly = 1) { conn.sendChannelData(any(), any(), any(), any()) }
     }
 
     @Test
@@ -132,7 +132,7 @@ class KeystrokeObfuscationTest {
         advanceUntilIdle()
 
         coVerify(exactly = 0) { conn.sendChaff() }
-        coVerify(exactly = 1) { conn.sendChannelData(any(), any()) }
+        coVerify(exactly = 1) { conn.sendChannelData(any(), any(), any(), any()) }
     }
 
     @Test
@@ -153,7 +153,7 @@ class KeystrokeObfuscationTest {
         advanceUntilIdle()
 
         coVerify(exactly = 0) { conn.sendChaff() }
-        coVerify(exactly = 1) { conn.sendChannelData(any(), any()) }
+        coVerify(exactly = 1) { conn.sendChannelData(any(), any(), any(), any()) }
     }
 
     @Test
@@ -161,7 +161,7 @@ class KeystrokeObfuscationTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val conn = mockk<SshConnection>(relaxed = true)
         val sendTimes = mutableListOf<Long>()
-        coEvery { conn.sendChannelData(any(), any()) } coAnswers {
+        coEvery { conn.sendChannelData(any(), any(), any(), any()) } coAnswers {
             sendTimes += testScheduler.currentTime
             Unit
         }
@@ -200,7 +200,7 @@ class KeystrokeObfuscationTest {
 
         // At least one chaff packet should have been sent
         coVerify(atLeast = 1) { conn.sendChaff() }
-        coVerify(exactly = 1) { conn.sendChannelData(any(), any()) }
+        coVerify(exactly = 1) { conn.sendChannelData(any(), any(), any(), any()) }
     }
 
     @Test

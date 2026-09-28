@@ -47,6 +47,8 @@ import org.connectbot.sshlib.crypto.PrivateKeyReader
 import org.connectbot.sshlib.crypto.SshPublicKeyEncoder
 import org.connectbot.sshlib.transport.PipedTransport
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.file.Files
@@ -480,15 +482,17 @@ class SshConnectionFlowTest {
         }
     }
 
-    @Test
-    fun `session channel preserves a multi-window stdout tail when close follows data`() = runTest {
+    @ParameterizedTest
+    @ValueSource(ints = [65536, 2097152])
+    fun `session channel preserves a multi-window stdout tail when close follows data`(windowSize: Int) = runTest {
         connectedFixture { connection, server, dispatcher ->
             connection.autoDisconnectOnLastChannelClose = false
+            connection.sessionWindowSize = windowSize
             authenticate(connection, server, dispatcher)
             val session = openSession(connection, server, dispatcher)
             val localChannel = session.localChannelNumber
             val packetSize = 32 * 1024
-            val expected = ByteArray(1024 * 1024) { index -> (index % 251).toByte() }
+            val expected = ByteArray(maxOf(1024 * 1024, windowSize * 2 + packetSize)) { index -> (index % 251).toByte() }
             val tailReceiverBlocked = CompletableDeferred<Unit>()
             val releaseTailReceiver = CompletableDeferred<Unit>()
             val received = async(dispatcher) {
@@ -505,7 +509,7 @@ class SshConnectionFlowTest {
             }
 
             var offset = 0
-            var availableWindow = 64 * 1024L
+            var availableWindow = windowSize.toLong()
             while (offset < expected.size) {
                 if (availableWindow == 0L) {
                     val adjust = withTimeout(5_000) { server.awaitChannelWindowAdjust() }
@@ -522,7 +526,8 @@ class SshConnectionFlowTest {
             withTimeout(5_000) {
                 while (session.isOpen) yield()
             }
-            assertTrue(tailReceiverBlocked.isCompleted)
+            // Dispatch can close the channel before the consumer reaches its pause point.
+            withTimeout(5_000) { tailReceiverBlocked.await() }
             releaseTailReceiver.complete(Unit)
             assertContentEquals(expected, withTimeout(5_000) { received.await() })
             assertNull(withTimeout(5_000) { session.read() })

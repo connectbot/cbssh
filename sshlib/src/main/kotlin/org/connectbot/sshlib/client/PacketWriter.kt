@@ -32,6 +32,7 @@ import kotlinx.coroutines.withContext
 import org.connectbot.sshlib.protocol.DeferredIo
 import org.connectbot.sshlib.transport.PacketIO
 import org.connectbot.sshlib.transport.TransportException
+import kotlin.coroutines.ContinuationInterceptor
 
 /** Ordered outbound effects. All queue/gate operations run on [dispatcher]; only this worker writes packets. */
 internal class PacketWriter(
@@ -59,31 +60,49 @@ internal class PacketWriter(
     private var keyExchanges = 0
     private var closed: Throwable? = null
     private val worker = scope.launch(dispatcher) {
-        var active: Write? = null
+        val active = ArrayDeque<Write>()
         try {
             for (ignored in wake) {
                 while (true) {
                     val next = pending.firstOrNull { keyExchanges == 0 || allowedDuringKex(it.type) } ?: break
                     pending.remove(next)
-                    active = next
-                    next.before()
-                    packetIO.writePacket(next.type, next.payload)
+                    active.addLast(next)
+                    var bytes = next.payload.size
+                    if (next.type == 94 && keyExchanges == 0) {
+                        while (active.size < 8) {
+                            val following = pending.firstOrNull() ?: break
+                            if (following.type != 94 || bytes + following.payload.size > 256 * 1024) break
+                            pending.removeFirst()
+                            active.addLast(following)
+                            bytes += following.payload.size
+                        }
+                    }
+                    active.forEach { it.before() }
+                    if (active.size == 1) {
+                        packetIO.writePacket(next.type, next.payload)
+                    } else {
+                        packetIO.writePackets(active.map { it.type to it.payload })
+                    }
                     currentCoroutineContext().ensureActive()
-                    next.after()
-                    next.completion.complete(Unit)
-                    next.permits.release()
-                    active = null
+                    while (active.isNotEmpty()) {
+                        val completed = active.first()
+                        completed.after()
+                        completed.completion.complete(Unit)
+                        completed.permits.release()
+                        active.removeFirst()
+                    }
                 }
             }
         } catch (failure: Throwable) {
             val unexpected = closed == null
             val cause = closed ?: if (failure is CancellationException) TransportException("Packet writer stopped", failure) else failure
             closed = cause
-            active?.let {
+            active.forEach {
                 it.discard()
                 it.completion.completeExceptionally(cause)
                 it.permits.release()
             }
+            active.clear()
             failPending(cause)
             if (unexpected) onFailure(cause)
         }
@@ -99,32 +118,46 @@ internal class PacketWriter(
         wake.trySend(Unit)
     }
 
-    suspend fun writePacket(type: Int, payload: ByteArray = byteArrayOf(), beforeWrite: () -> Unit = {}, afterWrite: () -> Unit = {}, discard: () -> Unit = {}): Deferred<Unit> {
+    suspend fun writePacket(type: Int, payload: ByteArray = byteArrayOf(), beforeWrite: () -> Unit = {}, afterWrite: () -> Unit = {}, discard: () -> Unit = {}): Deferred<Unit> = submitPacket(type, payload, beforeWrite, afterWrite, discard, copyPayload = true)
+
+    /** Transfer an exclusively owned serialized buffer. The caller must never access it again. */
+    suspend fun writeOwnedPacket(type: Int, payload: ByteArray): Deferred<Unit> = submitPacket(type, payload, {}, {}, {}, copyPayload = false)
+
+    private suspend fun submitPacket(type: Int, payload: ByteArray, beforeWrite: () -> Unit, afterWrite: () -> Unit, discard: () -> Unit, copyPayload: Boolean): Deferred<Unit> {
         val batch = currentCoroutineContext()[DeferredIo]
         val permits = if (allowedDuringKex(type)) controlSlots else slots
         val receipt = if (batch != null) {
-            withContext(dispatcher + NonCancellable) {
-                if (!permits.tryAcquire()) {
-                    val failure = TransportException("Outbound protocol queue exhausted")
-                    discard()
-                    onFailure(failure)
-                    throw failure
+            if (currentCoroutineContext()[ContinuationInterceptor] === dispatcher) {
+                // Owner effects already run on the queue's dispatcher. Admission and enqueue
+                // do not suspend, so cancellation cannot split them and no context is needed.
+                if (!permits.tryAcquire()) failAdmission(discard)
+                enqueue(type, payload, beforeWrite, afterWrite, permits, discard, copyPayload)
+            } else {
+                withContext(dispatcher + NonCancellable) {
+                    if (!permits.tryAcquire()) failAdmission(discard)
+                    enqueue(type, payload, beforeWrite, afterWrite, permits, discard, copyPayload)
                 }
-                enqueue(type, payload, beforeWrite, afterWrite, permits, discard)
             }
         } else {
             permits.acquire()
             // Acquiring the permit is admission. Cancellation after admission cannot retract
             // a packet whose peer may already have seen it.
             withContext(dispatcher + NonCancellable) {
-                enqueue(type, payload, beforeWrite, afterWrite, permits, discard)
+                enqueue(type, payload, beforeWrite, afterWrite, permits, discard, copyPayload)
             }
         }
         if (batch != null) batch.add(receipt) else receipt.await()
         return receipt
     }
 
-    private fun enqueue(type: Int, payload: ByteArray, before: () -> Unit, after: () -> Unit, permits: Semaphore, discard: () -> Unit): Deferred<Unit> {
+    private suspend fun failAdmission(discard: () -> Unit): Nothing = withContext(NonCancellable) {
+        val failure = TransportException("Outbound protocol queue exhausted")
+        discard()
+        onFailure(failure)
+        throw failure
+    }
+
+    private fun enqueue(type: Int, payload: ByteArray, before: () -> Unit, after: () -> Unit, permits: Semaphore, discard: () -> Unit, copyPayload: Boolean): Deferred<Unit> {
         val receipt = CompletableDeferred<Unit>()
         val failure = closed
         if (failure != null) {
@@ -132,7 +165,7 @@ internal class PacketWriter(
             discard()
             permits.release()
         } else {
-            pending.addLast(Write(type, payload.copyOf(), before, after, receipt, permits, discard))
+            pending.addLast(Write(type, if (copyPayload) payload.copyOf() else payload, before, after, receipt, permits, discard))
             wake.trySend(Unit)
         }
         return receipt

@@ -49,6 +49,20 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionBackpressureTest {
     @Test
+    fun `invalid channel data closes the connection without waiting for another packet`() = runTest {
+        fixture(ignoreTransportErrors = true) { connection, server, transport ->
+            val disconnected = backgroundScope.async { connection.disconnectedFlow.first() }
+            runCurrent()
+            server.sendChannelData(999, ByteArray(32_768))
+            withTimeout(1_000) {
+                transport.closed.await()
+                val failure = assertNotNull(disconnected.await())
+                assertTrue(failure.message.orEmpty().contains("unknown channel"))
+            }
+        }
+    }
+
+    @Test
     fun `unregistering remote forwarder cancels suspended handlers and releases resources`() = runTest {
         fixture { connection, server, _ ->
             val entered = CompletableDeferred<Unit>()

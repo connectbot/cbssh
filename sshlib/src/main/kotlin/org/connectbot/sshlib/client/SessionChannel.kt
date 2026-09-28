@@ -271,18 +271,23 @@ class SessionChannel internal constructor(
             while (window.remoteRemaining <= 0) {
                 windowAvailable.receive()
             }
-            var chunkSize = 0
+            var admittedBytes = 0
             if (!lifecycle.sendData {
-                    chunkSize = window.sendChunkSize(data.size - offset, maxPacketSize)
-                    if (chunkSize == 0) return@sendData
-                    val chunk = data.copyOfRange(offset, offset + chunkSize)
-                    connection.sendChannelData(_remoteChannelNumber, chunk)
-                    window.consumeRemote(chunkSize)
+                    // Four packets per admission keep eight concurrent local admissions below
+                    // the ordinary writer's 64-packet capacity. Never wait for credit here.
+                    repeat(4) {
+                        val position = offset + admittedBytes
+                        val chunkSize = window.sendChunkSize(data.size - position, maxPacketSize)
+                        if (chunkSize == 0) return@sendData
+                        connection.sendChannelData(_remoteChannelNumber, data, position, chunkSize)
+                        window.consumeRemote(chunkSize)
+                        admittedBytes += chunkSize
+                    }
                 }
             ) {
                 throw org.connectbot.sshlib.SshException("Cannot send data after EOF or CLOSE on channel $localChannelNumber")
             }
-            offset += chunkSize
+            offset += admittedBytes
         }
     }
 

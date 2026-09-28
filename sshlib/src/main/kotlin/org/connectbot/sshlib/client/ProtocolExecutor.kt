@@ -55,7 +55,10 @@ internal class ProtocolExecutor(scope: CoroutineScope, dispatcher: CoroutineDisp
 
     @Volatile private var closed: Throwable? = null
     val isClosed: Boolean get() = closed != null
-    private val inFlight = Semaphore(16)
+
+    // Eight local operations may each admit four data packets, leaving half
+    // the ordinary writer queue available for protocol-generated effects.
+    private val inFlight = Semaphore(8)
     private val worker = scope.launch(dispatcher + Owner(this)) {
         var failure: Throwable = IllegalStateException("Protocol processor closed")
         try {
