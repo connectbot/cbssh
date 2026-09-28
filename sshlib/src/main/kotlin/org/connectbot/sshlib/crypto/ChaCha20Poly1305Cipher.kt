@@ -124,7 +124,14 @@ internal class ChaCha20Poly1305Cipher(private val key: ByteArray) : PacketAead {
         return AeadResult(ciphertext, tag)
     }
 
-    override fun decrypt(packetLength: ByteArray, ciphertext: ByteArray, tag: ByteArray): ByteArray {
+    override fun decrypt(packetLength: ByteArray, ciphertext: ByteArray, tag: ByteArray): ByteArray = decryptBody(packetLength, ciphertext, ciphertext.size, tag, 0)
+
+    override fun decryptPacket(packetLength: ByteArray, encrypted: ByteArray): ByteArray {
+        if (encrypted.size < tagLength) throw TransportException("Truncated ChaCha20-Poly1305 packet")
+        return decryptBody(packetLength, encrypted, encrypted.size - tagLength, encrypted, encrypted.size - tagLength)
+    }
+
+    private fun decryptBody(packetLength: ByteArray, ciphertext: ByteArray, ciphertextLength: Int, tag: ByteArray, tagOffset: Int): ByteArray {
         // Note: nonce already set by decryptLength() for the same sequence number
         if (ChaCha20ParamFactory.usesChaCha20ParameterSpec()) {
             val polyKeyParams = ChaCha20ParamFactory.create(nonce, 0)
@@ -138,10 +145,10 @@ internal class ChaCha20Poly1305Cipher(private val key: ByteArray) : PacketAead {
 
         poly.init(polyKey)
         poly.update(packetLength, 0, 4)
-        poly.update(ciphertext, 0, ciphertext.size)
+        poly.update(ciphertext, 0, ciphertextLength)
         poly.finish(computedTag, 0)
 
-        val tagValid = constantTimeEquals(tag, computedTag)
+        val tagValid = constantTimeEquals(tag, computedTag, tagOffset)
         computedTag.fill(0)
         polyKey.fill(0)
 
@@ -149,15 +156,15 @@ internal class ChaCha20Poly1305Cipher(private val key: ByteArray) : PacketAead {
             throw TransportException("ChaCha20-Poly1305 authentication failed")
         }
 
-        val plaintext = ByteArray(ciphertext.size)
+        val plaintext = ByteArray(ciphertextLength)
         if (ChaCha20ParamFactory.usesChaCha20ParameterSpec()) {
             val payloadParams = ChaCha20ParamFactory.create(nonce, 1)
             payloadCipher.init(Cipher.ENCRYPT_MODE, mainKeySpec, payloadParams)
-            payloadCipher.doFinal(ciphertext, 0, ciphertext.size, plaintext, 0)
+            payloadCipher.doFinal(ciphertext, 0, ciphertextLength, plaintext, 0)
         } else {
             // For IvParameterSpec path, cipher was already initialized in polyKey generation
             payloadCipher.update(skipToNextBlock, 0, 32, skipToNextBlock, 0)
-            payloadCipher.doFinal(ciphertext, 0, ciphertext.size, plaintext, 0)
+            payloadCipher.doFinal(ciphertext, 0, ciphertextLength, plaintext, 0)
         }
 
         return plaintext
@@ -168,11 +175,11 @@ internal class ChaCha20Poly1305Cipher(private val key: ByteArray) : PacketAead {
         nonce.fill(0)
     }
 
-    private fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean {
-        if (a.size != b.size) return false
+    private fun constantTimeEquals(a: ByteArray, b: ByteArray, offset: Int = 0): Boolean {
+        if (a.size - offset != b.size) return false
         var result = 0
-        for (i in a.indices) {
-            result = result or (a[i].toInt() xor b[i].toInt())
+        for (i in b.indices) {
+            result = result or (a[offset + i].toInt() xor b[i].toInt())
         }
         return result == 0
     }

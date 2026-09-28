@@ -47,6 +47,19 @@ internal interface PacketAead : Destroyable {
      */
     fun encrypt(packetLength: ByteArray, plaintext: ByteArray): AeadResult
 
+    /** Encrypt a complete packet body, retaining the tag adjacent to the ciphertext. */
+    fun encryptPacket(packetLength: ByteArray, plaintext: ByteArray): ByteArray {
+        val result = encrypt(packetLength, plaintext)
+        return result.ciphertext + result.tag
+    }
+
+    /** Encrypt ordered plaintext buffers; implementations may consume them without concatenating. */
+    fun encryptPacket(packetLength: ByteArray, plaintext: List<ByteArray>): ByteArray {
+        val combined = java.nio.ByteBuffer.allocate(plaintext.sumOf { it.size })
+        plaintext.forEach { combined.put(it) }
+        return encryptPacket(packetLength, combined.array())
+    }
+
     /**
      * Decrypt ciphertext and verify authentication tag.
      *
@@ -57,6 +70,13 @@ internal interface PacketAead : Destroyable {
      * @throws org.connectbot.sshlib.transport.TransportException if authentication fails
      */
     fun decrypt(packetLength: ByteArray, ciphertext: ByteArray, tag: ByteArray): ByteArray
+
+    /** Decrypt a contiguous ciphertext and trailing tag, authenticating before returning plaintext. */
+    fun decryptPacket(packetLength: ByteArray, encrypted: ByteArray): ByteArray {
+        if (encrypted.size < tagLength) throw org.connectbot.sshlib.transport.TransportException("Truncated AEAD packet")
+        val length = encrypted.size - tagLength
+        return decrypt(packetLength, encrypted.copyOfRange(0, length), encrypted.copyOfRange(length, encrypted.size))
+    }
 
     fun encryptLength(sequenceNumber: Long, plainLength: ByteArray): ByteArray = throw UnsupportedOperationException("This cipher does not encrypt the length field")
 

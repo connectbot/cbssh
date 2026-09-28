@@ -20,9 +20,16 @@ package org.connectbot.sshlib.transport
 import kotlinx.coroutines.runBlocking
 import org.connectbot.sshlib.crypto.AeadResult
 import org.connectbot.sshlib.crypto.AesCbcCipher
+import org.connectbot.sshlib.crypto.AesCtrCipher
+import org.connectbot.sshlib.crypto.AesGcmCipher
+import org.connectbot.sshlib.crypto.ChaCha20Poly1305Cipher
 import org.connectbot.sshlib.crypto.HmacSha256
 import org.connectbot.sshlib.crypto.PacketAead
 import org.connectbot.sshlib.protocol.SshEnums
+import org.connectbot.sshlib.protocol.SshMsgChannelData
+import org.connectbot.sshlib.protocol.createByteString
+import org.connectbot.sshlib.protocol.toByteArray
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -30,8 +37,90 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.ByteBuffer
 import java.security.SecureRandom
+import kotlin.test.assertFailsWith
 
 class PacketIOTest {
+
+    @Test
+    fun `typed AEAD channel decoding authenticates and rejects truncated inner strings`() = runBlocking {
+        val data = ByteArray(32768) { it.toByte() }
+        val body = SshMsgChannelData().apply {
+            setRecipientChannel(7)
+            setData(createByteString(data))
+            _check()
+        }.toByteArray()
+        suspend fun encode(payload: ByteArray): ByteArray {
+            val transport = ByteArrayTransport()
+            val writer = PacketIO(transport)
+            writer.enableSendAead(AesGcmCipher(ByteArray(16), ByteArray(12)))
+            writer.writePacket(94, payload)
+            return transport.getWrittenData()
+        }
+        suspend fun decode(wire: ByteArray): org.connectbot.sshlib.protocol.UnencryptedPacket.UnencryptedPayload {
+            val input = ByteArrayTransport(wire)
+            val reads = mutableListOf<Pair<ByteArray, ByteArray>>()
+            val tracking = object : Transport by input {
+                override suspend fun read(count: Int): ByteArray = input.read(count).also { reads += it to it.copyOf() }
+            }
+            val transport = tracking
+            val reader = PacketIO(transport, decodeChannelData = true)
+            reader.enableReceiveAead(AesGcmCipher(ByteArray(16), ByteArray(12)))
+            val packet = reader.readPacket()
+            reads.forEach { (actual, original) -> assertArrayEquals(original, actual) }
+            return packet
+        }
+        val wire = encode(body)
+        run {
+            val parsed = decode(wire)
+            assertEquals(7L, parsed.channelData().recipientChannel())
+            assertArrayEquals(data, parsed.channelData().data().data())
+            val altered = wire.copyOf()
+            altered[altered.lastIndex] = (altered.last().toInt() xor 1).toByte()
+            assertTrue(assertFailsWith<TransportException> { decode(altered) }.message.orEmpty().contains("authentication"))
+            assertTrue(assertFailsWith<TransportException> { decode(encode(body.copyOf(body.size - 1))) }.message.orEmpty().contains("Malformed SSH packet payload"))
+        }
+    }
+
+    @Test
+    fun `batch protection advances each sequence and preserves the following packet`() = runBlocking {
+        for (mode in listOf("plain", "gcm", "chacha", "mac", "etm")) {
+            fun protect(io: PacketIO) {
+                when (mode) {
+                    "gcm" -> io.enableAead(AesGcmCipher(ByteArray(16), ByteArray(12)), AesGcmCipher(ByteArray(16), ByteArray(12)))
+
+                    "chacha" -> io.enableAead(ChaCha20Poly1305Cipher(ByteArray(64)), ChaCha20Poly1305Cipher(ByteArray(64)))
+
+                    "mac", "etm" -> io.enableEncryption(
+                        AesCtrCipher(ByteArray(16), ByteArray(16), forEncryption = true),
+                        HmacSha256(ByteArray(32)),
+                        AesCtrCipher(ByteArray(16), ByteArray(16), forEncryption = false),
+                        HmacSha256(ByteArray(32)),
+                        clientToServerEtm = mode == "etm",
+                        serverToClientEtm = mode == "etm",
+                    )
+                }
+            }
+            val payloads = (0..3).map { value ->
+                SshMsgChannelData().apply {
+                    setRecipientChannel(7)
+                    setData(createByteString(byteArrayOf(value.toByte())))
+                    _check()
+                }.toByteArray()
+            }
+            val transport = ByteArrayTransport()
+            val writer = PacketIO(transport)
+            protect(writer)
+            writer.writePackets(payloads.take(3).map { 94 to it })
+            writer.writePacket(94, payloads.last())
+            val reader = PacketIO(ByteArrayTransport(transport.getWrittenData()), decodeChannelData = true)
+            protect(reader)
+            for (value in 0..3) {
+                val received = reader.readPacketWithSequence()
+                assertEquals(value.toLong(), received.sequenceNumber, mode)
+                assertArrayEquals(byteArrayOf(value.toByte()), received.payload.channelData().data().data(), mode)
+            }
+        }
+    }
 
     private class TrackingSecureRandom : SecureRandom() {
         var requestedBytes = 0

@@ -4,6 +4,8 @@ meta:
   imports:
   - invalid_message
   - ssh_enums
+  - ssh_msg_channel_data
+  - ssh_msg_channel_extended_data
   - ssh_msg_debug
   - ssh_msg_disconnect
   - ssh_msg_ext_info
@@ -23,19 +25,22 @@ seq:
   valid:
     expr: _ >= 4 and _ <= len_packet - 2
 - id: payload
-  type: unencrypted_payload
+  type: unencrypted_payload(false)
   size: len_packet - len_random_padding - 1
 - id: random_padding
   size: len_random_padding
 types:
   unencrypted_payload:
+    params:
+    - id: decode_channel_data
+      type: bool
     seq:
     - id: message_type
       type: u1
       enum: ssh_enums::message_type
     - id: body
-      size: _parent.as<unencrypted_packet>.len_packet - _parent.as<unencrypted_packet>.len_random_padding
-        - 2
+      if: not (decode_channel_data and (message_type == ssh_enums::message_type::ssh_msg_channel_data or message_type == ssh_enums::message_type::ssh_msg_channel_extended_data))
+      size: _io.size - 1
       type:
         switch-on: message_type
         cases:
@@ -49,3 +54,13 @@ types:
           ssh_enums::message_type::ssh_msg_newcompress: ssh_msg_newcompress
           ssh_enums::message_type::ssh_msg_kexinit: ssh_msg_kexinit
           _: invalid_message
+    - id: channel_data
+      type: ssh_msg_channel_data
+      if: decode_channel_data and message_type == ssh_enums::message_type::ssh_msg_channel_data
+    - id: channel_extended_data
+      type: ssh_msg_channel_extended_data
+      if: decode_channel_data and message_type == ssh_enums::message_type::ssh_msg_channel_extended_data
+    instances:
+      message_number:
+        pos: 0
+        type: u1

@@ -1,6 +1,6 @@
 /*
  * ConnectBot SSH Library
- * Copyright 2025 Kenny Root
+ * Copyright 2025-2026 Kenny Root
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,29 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
 class ChaCha20Poly1305CipherTest {
+
+    @Test
+    fun `contiguous ciphertext authenticates across sequence numbers`() {
+        val key = ByteArray(64) { it.toByte() }
+        val sender = ChaCha20Poly1305Cipher(key.copyOf())
+        val receiver = ChaCha20Poly1305Cipher(key.copyOf())
+        for (sequence in listOf(0L, 1L, 255L, 256L)) {
+            val plaintext = ByteArray(32768) { (it + sequence).toByte() }
+            val length = java.nio.ByteBuffer.allocate(4).putInt(plaintext.size).array()
+            val wireLength = sender.encryptLength(sequence, length)
+            val encrypted = sender.encryptPacket(wireLength, plaintext)
+            assertContentEquals(length, receiver.decryptLength(sequence, wireLength))
+            assertContentEquals(plaintext, receiver.decryptPacket(wireLength, encrypted))
+            for (offset in listOf(0, encrypted.lastIndex)) {
+                val changed = encrypted.copyOf()
+                changed[offset] = (changed[offset].toInt() xor 1).toByte()
+                val rejecting = ChaCha20Poly1305Cipher(key.copyOf())
+                rejecting.decryptLength(sequence, wireLength)
+                assertFailsWith<TransportException> { rejecting.decryptPacket(wireLength, changed) }
+            }
+        }
+        assertFailsWith<TransportException> { receiver.decryptPacket(ByteArray(4), ByteArray(15)) }
+    }
 
     // RFC 8439 Section 2.5.2 Poly1305 test vector
     @Test

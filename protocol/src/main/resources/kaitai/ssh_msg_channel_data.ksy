@@ -9,3 +9,13 @@ seq:
   type: u4
 - id: data
   type: byte_string
+types:
+  header:
+    doc: >
+      The fixed channel-data prefix, for serializing a source array range directly
+      into an owned packet buffer without an intermediate chunk array.
+    seq:
+    - id: recipient_channel
+      type: u4
+    - id: data_length
+      type: u4

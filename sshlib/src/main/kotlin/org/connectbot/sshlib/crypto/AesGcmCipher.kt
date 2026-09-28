@@ -1,6 +1,6 @@
 /*
  * ConnectBot SSH Library
- * Copyright 2025 Kenny Root
+ * Copyright 2025-2026 Kenny Root
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,6 +41,7 @@ internal class AesGcmCipher(
 ) : PacketAead {
     override val tagLength: Int = 16
 
+    private val cipher = Cipher.getInstance("AES/GCM/NoPadding")
     private val keySpec: SecretKeySpec
     private val fixedField = ByteArray(4)
     private var invocationCounter: Long
@@ -66,33 +67,54 @@ internal class AesGcmCipher(
     }
 
     override fun encrypt(packetLength: ByteArray, plaintext: ByteArray): AeadResult {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val output = encryptPacket(packetLength, plaintext)
+        return AeadResult(
+            output.copyOfRange(0, output.size - tagLength),
+            output.copyOfRange(output.size - tagLength, output.size),
+        )
+    }
+
+    override fun encryptPacket(packetLength: ByteArray, plaintext: ByteArray): ByteArray = encryptPacket(packetLength, listOf(plaintext))
+
+    override fun encryptPacket(packetLength: ByteArray, plaintext: List<ByteArray>): ByteArray {
         val gcmSpec = GCMParameterSpec(128, buildNonce())
         cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
         cipher.updateAAD(packetLength)
-        val output = cipher.doFinal(plaintext)
-
+        val output = ByteArray(plaintext.sumOf { it.size } + tagLength)
+        var written = 0
+        for (index in 0 until plaintext.lastIndex) {
+            val part = plaintext[index]
+            written += cipher.update(part, 0, part.size, output, written)
+        }
+        if (plaintext.isEmpty()) {
+            cipher.doFinal(output, written)
+        } else {
+            val last = plaintext.last()
+            cipher.doFinal(last, 0, last.size, output, written)
+        }
         invocationCounter++
-
-        val ciphertext = output.copyOfRange(0, output.size - tagLength)
-        val tag = output.copyOfRange(output.size - tagLength, output.size)
-        return AeadResult(ciphertext, tag)
+        return output
     }
 
-    override fun decrypt(packetLength: ByteArray, ciphertext: ByteArray, tag: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val gcmSpec = GCMParameterSpec(128, buildNonce())
-        cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
-        cipher.updateAAD(packetLength)
+    override fun decrypt(packetLength: ByteArray, ciphertext: ByteArray, tag: ByteArray): ByteArray = decryptPacket(packetLength, ciphertext + tag)
 
-        val input = ciphertext + tag
+    override fun decryptPacket(packetLength: ByteArray, encrypted: ByteArray): ByteArray {
+        initDecrypt(packetLength, encrypted)
+
         try {
-            val plaintext = cipher.doFinal(input)
+            val plaintext = cipher.doFinal(encrypted)
             invocationCounter++
             return plaintext
         } catch (e: AEADBadTagException) {
             throw TransportException("AEAD authentication failed", e)
         }
+    }
+
+    private fun initDecrypt(packetLength: ByteArray, encrypted: ByteArray) {
+        if (encrypted.size < tagLength) throw TransportException("Truncated AEAD packet")
+        val gcmSpec = GCMParameterSpec(128, buildNonce())
+        cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
+        cipher.updateAAD(packetLength)
     }
 
     override fun destroy() {

@@ -18,12 +18,14 @@
 package org.connectbot.sshlib.transport
 
 import io.kaitai.struct.ByteBufferKaitaiStream
+import io.kaitai.struct.KaitaiStream
 import org.connectbot.sshlib.crypto.PacketAead
 import org.connectbot.sshlib.crypto.PacketCipher
 import org.connectbot.sshlib.crypto.PacketCompressor
 import org.connectbot.sshlib.crypto.PacketMac
 import org.connectbot.sshlib.kaitaiParseFailureOrNull
 import org.connectbot.sshlib.protocol.IdBanner
+import org.connectbot.sshlib.protocol.SshPacketHeader
 import org.connectbot.sshlib.protocol.UnencryptedPacket
 import org.slf4j.LoggerFactory
 import java.io.ByteArrayOutputStream
@@ -48,6 +50,7 @@ import java.security.SecureRandom
 internal class PacketIO(
     private val transport: Transport,
     private val secureRandom: SecureRandom = SecureRandom(),
+    private val decodeChannelData: Boolean = false,
 ) {
     internal data class ReceivedPacket(
         val payload: UnencryptedPacket.UnencryptedPayload,
@@ -87,8 +90,9 @@ internal class PacketIO(
     private var receiveCompressionActive: Boolean = false
 
     // Wire-byte counters for re-key threshold tracking
-    internal var bytesSentOnWire: Long = 0L
-    internal var bytesReceivedOnWire: Long = 0L
+    @Volatile internal var bytesSentOnWire: Long = 0L
+
+    @Volatile internal var bytesReceivedOnWire: Long = 0L
 
     /**
      * Enable encryption and MAC for subsequent packets.
@@ -240,40 +244,31 @@ internal class PacketIO(
     /** Read a packet together with the uint32 sequence number that authenticated it. */
     suspend fun readPacketWithSequence(): ReceivedPacket {
         val sequenceNumber = receiveSequenceNumber
-        val rawPayloadBytes = readRawPayloadBytes()
+        val rawPayload = readRawPayloadStream()
 
         val compressor = receiveCompressor
-        val payloadBytes = if (compressor != null && receiveCompressionActive) {
-            compressor.uncompress(rawPayloadBytes)
+        val payloadStream = if (compressor != null && receiveCompressionActive) {
+            ByteBufferKaitaiStream(compressor.uncompress(rawPayload.readBytesFull()))
         } else {
-            rawPayloadBytes
+            rawPayload
         }
-
+        val payload = parsePayloadStream(payloadStream)
         return ReceivedPacket(
-            payload = parsePayloadBytes(payloadBytes),
+            payload = payload,
             sequenceNumber = sequenceNumber,
-            messageNumber = payloadBytes.first().toInt() and 0xff,
+            messageNumber = payload.messageNumber(),
         )
     }
 
     /**
-     * Wrap raw payload bytes in a minimal UnencryptedPacket frame so Kaitai
-     * can parse them with proper parent context for body length calculation.
+     * Parse the already bounded, authenticated payload directly with Kaitai.
+     * The payload schema uses its stream size and does not require a packet envelope.
      */
-    private fun parsePayloadBytes(payloadBytes: ByteArray): UnencryptedPacket.UnencryptedPayload {
+    private fun parsePayloadStream(stream: KaitaiStream): UnencryptedPacket.UnencryptedPayload {
         try {
-            val paddingLength = 4
-            val packetLength = 1 + payloadBytes.size + paddingLength
-            val buffer = ByteArrayOutputStream()
-            buffer.write(ByteBuffer.allocate(4).putInt(packetLength).array())
-            buffer.write(paddingLength)
-            buffer.write(payloadBytes)
-            buffer.write(ByteArray(paddingLength))
-            val fullPacket = buffer.toByteArray()
-            val stream = ByteBufferKaitaiStream(fullPacket)
-            val packet = UnencryptedPacket(stream)
-            packet._read()
-            return packet.payload()
+            val payload = UnencryptedPacket.UnencryptedPayload(stream, decodeChannelData)
+            payload._read()
+            return payload
         } catch (e: RuntimeException) {
             val parseFailure = e.kaitaiParseFailureOrNull() ?: throw e
             throw TransportException("Malformed SSH packet payload", parseFailure)
@@ -281,39 +276,42 @@ internal class PacketIO(
     }
 
     /**
-     * Read and decrypt/verify the next SSH packet, returning the raw payload bytes
+     * Read and decrypt/verify the next SSH packet, returning a bounded payload view
      * (message_type + body) before decompression.
      */
-    private suspend fun readRawPayloadBytes(): ByteArray {
+    private suspend fun readRawPayloadStream(): KaitaiStream {
         val currentAead = receiveAead
         if (currentAead != null) {
-            return readAeadPacketBytes(currentAead)
+            return readAeadPacketStream(currentAead)
         }
 
         val currentCipher = receiveCipher
         val currentMac = receiveMac
 
         if (currentCipher == null || currentMac == null) {
-            return readUnencryptedPacketBytes()
+            return readUnencryptedPacketStream()
         } else if (receiveEtm) {
-            return readEtmPacketBytes(currentCipher, currentMac)
+            return readEtmPacketStream(currentCipher, currentMac)
         } else {
-            return readEncryptedPacketBytes(currentCipher, currentMac)
+            return readEncryptedPacketStream(currentCipher, currentMac)
         }
     }
 
-    /**
-     * Extract the payload bytes (message_type + body) from a decrypted packet.
-     * The decrypted packet is: packet_length(4) + padding_length(1) + payload + padding.
-     */
-    private fun extractPayloadBytes(decryptedPacket: ByteArray): ByteArray {
-        val paddingLength = decryptedPacket[4].toInt() and 0xFF
-        val packetLength = ByteBuffer.wrap(decryptedPacket, 0, 4).int
-        val payloadLength = packetLength - paddingLength - 1
-        return decryptedPacket.copyOfRange(5, 5 + payloadLength)
+    /** Parse a bounded decrypted body directly; no copied length-field envelope is needed. */
+    private fun extractPayloadStream(body: ByteBuffer): KaitaiStream {
+        try {
+            val stream = ByteBufferKaitaiStream(body)
+            val header = SshPacketHeader(stream)
+            header._read()
+            // The generated schema validates the boundary; the runtime provides a bounded view.
+            return stream.substream(header.payloadLength().toLong())
+        } catch (e: RuntimeException) {
+            val parseFailure = e.kaitaiParseFailureOrNull() ?: throw e
+            throw TransportException("Malformed SSH packet body", parseFailure)
+        }
     }
 
-    private suspend fun readUnencryptedPacketBytes(): ByteArray {
+    private suspend fun readUnencryptedPacketStream(): KaitaiStream {
         // Read packet_length (4 bytes)
         val lengthBytes = transport.read(4)
         bytesReceivedOnWire += 4
@@ -328,11 +326,10 @@ internal class PacketIO(
         bytesReceivedOnWire += packetLength
 
         receiveSequenceNumber++
-        val fullPacket = lengthBytes + packetData
-        return extractPayloadBytes(fullPacket)
+        return extractPayloadStream(ByteBuffer.wrap(packetData))
     }
 
-    private suspend fun readEncryptedPacketBytes(cipher: PacketCipher, mac: PacketMac): ByteArray {
+    private suspend fun readEncryptedPacketStream(cipher: PacketCipher, mac: PacketMac): KaitaiStream {
         val blockSize = cipher.blockSize
         val macLength = mac.macLength
 
@@ -381,7 +378,7 @@ internal class PacketIO(
         }
 
         receiveSequenceNumber++
-        return extractPayloadBytes(decryptedPacket)
+        return extractPayloadStream(ByteBuffer.wrap(decryptedPacket, 4, decryptedPacket.size - 4).slice())
     }
 
     /**
@@ -390,7 +387,7 @@ internal class PacketIO(
      * In ETM mode, the MAC is computed over (sequence_number || encrypted_length || encrypted_payload).
      * The length field is NOT encrypted.
      */
-    private suspend fun readEtmPacketBytes(cipher: PacketCipher, mac: PacketMac): ByteArray {
+    private suspend fun readEtmPacketStream(cipher: PacketCipher, mac: PacketMac): KaitaiStream {
         val macLength = mac.macLength
 
         // In ETM mode, length is NOT encrypted
@@ -420,10 +417,8 @@ internal class PacketIO(
         // Decrypt
         val decryptedPayload = cipher.decrypt(encryptedPayload)
 
-        // Rebuild full packet structure for payload extraction
-        val fullPacket = lengthBytes + decryptedPayload
         receiveSequenceNumber++
-        return extractPayloadBytes(fullPacket)
+        return extractPayloadStream(ByteBuffer.wrap(decryptedPayload))
     }
 
     /**
@@ -437,7 +432,7 @@ internal class PacketIO(
      * Wire format: encrypted_length (4B) || ciphertext || auth_tag (16B)
      * The encrypted length bytes are passed as AAD to encrypt/decrypt.
      */
-    private suspend fun readAeadPacketBytes(aead: PacketAead): ByteArray {
+    private suspend fun readAeadPacketStream(aead: PacketAead): KaitaiStream {
         val wireLength = transport.read(4)
         bytesReceivedOnWire += 4
 
@@ -457,16 +452,12 @@ internal class PacketIO(
             throw TransportException("Invalid AEAD packet length: $packetLength")
         }
 
-        val ciphertext = transport.read(packetLength)
-        bytesReceivedOnWire += packetLength
-        val tag = transport.read(aead.tagLength)
-        bytesReceivedOnWire += aead.tagLength
+        val encrypted = transport.read(packetLength + aead.tagLength)
+        bytesReceivedOnWire += encrypted.size
+        val plaintext = ByteBuffer.wrap(aead.decryptPacket(aadBytes, encrypted))
 
-        val plaintext = aead.decrypt(aadBytes, ciphertext, tag)
-
-        val fullPacket = lengthBytes + plaintext
         receiveSequenceNumber++
-        return extractPayloadBytes(fullPacket)
+        return extractPayloadStream(plaintext)
     }
 
     /**
@@ -476,37 +467,59 @@ internal class PacketIO(
      * @param payload Message payload (excluding message type byte)
      */
     suspend fun writePacket(messageType: Int, payload: ByteArray = byteArrayOf()) {
+        val buffers = encodePacket(messageType, payload, sendSequenceNumber)
+        writeBuffers(buffers)
+        bytesSentOnWire += buffers.sumOf { it.size }
+        sendSequenceNumber++
+    }
+
+    // Only PacketWriter uses this, with a bounded contiguous run of channel-data packets.
+    // Protection changes and write callbacks occur outside the batch.
+    suspend fun writePackets(packets: List<Pair<Int, ByteArray>>) {
+        val buffers = ArrayList<ByteArray>(packets.size * 2)
+        for ((index, packet) in packets.withIndex()) {
+            buffers.addAll(encodePacket(packet.first, packet.second, sendSequenceNumber + index))
+        }
+        writeBuffers(buffers)
+        bytesSentOnWire += buffers.sumOf { it.size }
+        sendSequenceNumber += packets.size
+    }
+
+    /** One owned contiguous batch keeps custom transports on the existing write API. */
+    private suspend fun writeBuffers(buffers: List<ByteArray>) {
+        if (buffers.size == 1) {
+            transport.write(buffers.single())
+        } else {
+            val output = ByteBuffer.allocate(buffers.sumOf { it.size })
+            buffers.forEach { output.put(it) }
+            transport.write(output.array())
+        }
+    }
+
+    /** Compression, padding, and protection are synchronous; only the transport write suspends. */
+    private fun encodePacket(messageType: Int, payload: ByteArray, sequenceNumber: Long): List<ByteArray> {
         val compressor = sendCompressor
         if (compressor != null && sendCompressionActive) {
-            val uncompressed = byteArrayOf(messageType.toByte()) + payload
-            val compressed = compressor.compress(uncompressed)
-            writeRawPacket(compressed[0].toInt() and 0xFF, compressed.copyOfRange(1, compressed.size))
-        } else {
-            writeRawPacket(messageType, payload)
+            val compressed = compressor.compress(byteArrayOf(messageType.toByte()) + payload)
+            return encodeRawPacket(compressed[0].toInt() and 0xFF, compressed.copyOfRange(1, compressed.size), sequenceNumber)
         }
+        return encodeRawPacket(messageType, payload, sequenceNumber)
     }
 
-    private suspend fun writeRawPacket(messageType: Int, payload: ByteArray = byteArrayOf()) {
-        logger.debug("Writing packet type $messageType (seq=$sendSequenceNumber)")
+    private fun encodeRawPacket(messageType: Int, payload: ByteArray, sequenceNumber: Long): List<ByteArray> {
+        logger.debug("Writing packet type $messageType (seq=$sequenceNumber)")
         val currentAead = sendAead
-        if (currentAead != null) {
-            writeAeadPacket(messageType, payload, currentAead)
-            return
-        }
-
+        if (currentAead != null) return encodeAeadPacket(messageType, payload, currentAead, sequenceNumber)
         val currentCipher = sendCipher
         val currentMac = sendMac
-
-        if (currentCipher == null || currentMac == null) {
-            writeUnencryptedPacket(messageType, payload)
-        } else if (sendEtm) {
-            writeEtmPacket(messageType, payload, currentCipher, currentMac)
-        } else {
-            writeEncryptedPacket(messageType, payload, currentCipher, currentMac)
+        return when {
+            currentCipher == null || currentMac == null -> encodeUnencryptedPacket(messageType, payload)
+            sendEtm -> encodeEtmPacket(messageType, payload, currentCipher, currentMac, sequenceNumber)
+            else -> encodeEncryptedPacket(messageType, payload, currentCipher, currentMac, sequenceNumber)
         }
     }
 
-    private suspend fun writeUnencryptedPacket(messageType: Int, payload: ByteArray) {
+    private fun encodeUnencryptedPacket(messageType: Int, payload: ByteArray): List<ByteArray> {
         val payloadLength = 1 + payload.size // message type + payload
         val blockSize = 8 // Minimum block size per RFC 4253
 
@@ -515,7 +528,7 @@ internal class PacketIO(
         val packetLength = 1 + payloadLength + paddingLength
 
         // Build packet
-        val buffer = ByteArrayOutputStream()
+        val buffer = ByteArrayOutputStream(packetLength + 4)
 
         // packet_length (4 bytes)
         buffer.write(ByteBuffer.allocate(4).putInt(packetLength).array())
@@ -534,17 +547,16 @@ internal class PacketIO(
         buffer.write(padding)
 
         val data = buffer.toByteArray()
-        transport.write(data)
-        bytesSentOnWire += data.size
-        sendSequenceNumber++
+        return listOf(data)
     }
 
-    private suspend fun writeEncryptedPacket(
+    private fun encodeEncryptedPacket(
         messageType: Int,
         payload: ByteArray,
         cipher: PacketCipher,
         mac: PacketMac,
-    ) {
+        sequenceNumber: Long,
+    ): List<ByteArray> {
         val payloadLength = 1 + payload.size
         val blockSize = cipher.blockSize
 
@@ -553,7 +565,7 @@ internal class PacketIO(
         val packetLength = 1 + payloadLength + paddingLength
 
         // Build unencrypted packet
-        val buffer = ByteArrayOutputStream()
+        val buffer = ByteArrayOutputStream(packetLength + 4)
 
         // packet_length (4 bytes)
         buffer.write(ByteBuffer.allocate(4).putInt(packetLength).array())
@@ -574,16 +586,14 @@ internal class PacketIO(
         val unencryptedPacket = buffer.toByteArray()
 
         // Compute MAC before encryption (over plaintext)
-        val macBytes = mac.compute(sendSequenceNumber, unencryptedPacket)
+        val macBytes = mac.compute(sequenceNumber, unencryptedPacket)
 
         // Encrypt packet
         val encryptedPacket = cipher.encrypt(unencryptedPacket)
 
         // Send encrypted packet + MAC
         val data = encryptedPacket + macBytes
-        transport.write(data)
-        bytesSentOnWire += data.size
-        sendSequenceNumber++
+        return listOf(data)
     }
 
     /**
@@ -592,12 +602,13 @@ internal class PacketIO(
      * In ETM mode, the length field is NOT encrypted, and MAC is computed over
      * (sequence_number || packet_length || encrypted_payload).
      */
-    private suspend fun writeEtmPacket(
+    private fun encodeEtmPacket(
         messageType: Int,
         payload: ByteArray,
         cipher: PacketCipher,
         mac: PacketMac,
-    ) {
+        sequenceNumber: Long,
+    ): List<ByteArray> {
         val payloadLength = 1 + payload.size
         val blockSize = cipher.blockSize
 
@@ -606,7 +617,7 @@ internal class PacketIO(
         val packetLength = 1 + payloadLength + paddingLength
 
         // Build the payload to encrypt (padding_length + message type + payload + padding)
-        val payloadBuffer = ByteArrayOutputStream()
+        val payloadBuffer = ByteArrayOutputStream(packetLength)
         payloadBuffer.write(paddingLength)
         payloadBuffer.write(messageType)
         payloadBuffer.write(payload)
@@ -619,14 +630,13 @@ internal class PacketIO(
         val encryptedPayload = cipher.encrypt(payloadToEncrypt)
 
         // Compute MAC over sequence_number || packet_length || encrypted_payload
-        val macBytes = mac.computeEtm(sendSequenceNumber, packetLength, encryptedPayload)
+        val macBytes = mac.computeEtm(sequenceNumber, packetLength, encryptedPayload)
 
         // Build final packet: length (unencrypted) + encrypted_payload + MAC
         val lengthBytes = ByteBuffer.allocate(4).putInt(packetLength).array()
-        val data = lengthBytes + encryptedPayload + macBytes
-        transport.write(data)
-        bytesSentOnWire += data.size
-        sendSequenceNumber++
+        val data = ByteBuffer.allocate(lengthBytes.size + encryptedPayload.size + macBytes.size)
+            .put(lengthBytes).put(encryptedPayload).put(macBytes).array()
+        return listOf(data)
     }
 
     /**
@@ -640,42 +650,35 @@ internal class PacketIO(
      * Wire format: encrypted_length (4B) || ciphertext || auth_tag (16B)
      * The encrypted length bytes are passed as AAD to encrypt.
      */
-    private suspend fun writeAeadPacket(
+    private fun encodeAeadPacket(
         messageType: Int,
         payload: ByteArray,
         aead: PacketAead,
-    ) {
+        sequenceNumber: Long,
+    ): List<ByteArray> {
         val payloadLength = 1 + payload.size // message type + payload
         val blockSize = if (aead.encryptsLength) 8 else 16
 
         val paddingLength = calculateAeadPaddingLength(payloadLength, blockSize)
         val packetLength = 1 + payloadLength + paddingLength
 
-        val plaintextBuffer = ByteArrayOutputStream()
-        plaintextBuffer.write(paddingLength)
-        plaintextBuffer.write(messageType)
-        plaintextBuffer.write(payload)
-        plaintextBuffer.write(securePadding(paddingLength))
-
-        val plaintext = plaintextBuffer.toByteArray()
+        // AES-GCM consumes these parts directly into its owned ciphertext/tag buffer.
+        val plaintext = listOf(byteArrayOf(paddingLength.toByte(), messageType.toByte()), payload, securePadding(paddingLength))
         val lengthBytes = ByteBuffer.allocate(4).putInt(packetLength).array()
 
         val wireLength: ByteArray
         val aadBytes: ByteArray
         if (aead.encryptsLength) {
-            wireLength = aead.encryptLength(sendSequenceNumber, lengthBytes)
+            wireLength = aead.encryptLength(sequenceNumber, lengthBytes)
             aadBytes = wireLength
         } else {
             wireLength = lengthBytes
             aadBytes = lengthBytes
         }
 
-        val result = aead.encrypt(aadBytes, plaintext)
+        val encrypted = aead.encryptPacket(aadBytes, plaintext)
 
-        val data = wireLength + result.ciphertext + result.tag
-        transport.write(data)
-        bytesSentOnWire += data.size
-        sendSequenceNumber++
+        return listOf(wireLength, encrypted)
     }
 
     /**

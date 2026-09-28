@@ -1,6 +1,6 @@
 /*
  * ConnectBot SSH Library
- * Copyright 2025 Kenny Root
+ * Copyright 2025-2026 Kenny Root
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +19,12 @@ package org.connectbot.sshlib.crypto
 
 import org.connectbot.sshlib.transport.TransportException
 import org.junit.jupiter.api.Assertions.assertArrayEquals
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.nio.ByteBuffer
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlin.test.assertFailsWith
 
 class AesGcmCipherTest {
@@ -64,6 +68,106 @@ class AesGcmCipherTest {
         val decrypted = decryptor.decrypt(packetLength, result.ciphertext, result.tag)
 
         assertArrayEquals(plaintext, decrypted)
+    }
+
+    @Test
+    fun completePacketMatchesSplitEncryptionAcrossNonces() {
+        for (keySize in listOf(16, 32)) {
+            val key = ByteArray(keySize) { it.toByte() }
+            val complete = AesGcmCipher(key.copyOf(), makeIv(counter = 127))
+            val split = AesGcmCipher(key.copyOf(), makeIv(counter = 127))
+            val receiver = AesGcmCipher(key.copyOf(), makeIv(counter = 127))
+            repeat(3) { packet ->
+                val plaintext = ByteArray(32768) { (it + packet).toByte() }
+                val length = packetLengthBytes(plaintext.size)
+                val encrypted = complete.encryptPacket(length, plaintext)
+                val expected = split.encrypt(length, plaintext)
+                assertArrayEquals(expected.ciphertext + expected.tag, encrypted)
+                assertArrayEquals(plaintext, receiver.decryptPacket(length, encrypted))
+            }
+        }
+    }
+
+    @Test
+    fun segmentedEncryptionMatchesJceAcrossBlockBoundariesAndNonces() {
+        for (keySize in listOf(16, 32)) {
+            val key = ByteArray(keySize) { it.toByte() }
+            val sender = AesGcmCipher(key.copyOf(), makeIv(counter = 127))
+            val receiver = AesGcmCipher(key.copyOf(), makeIv(counter = 127))
+            for ((index, size) in listOf(0, 1, 15, 16, 17, 31, 32, 33, 1023, 32768).withIndex()) {
+                val data = ByteArray(size) { (it + index).toByte() }
+                val length = packetLengthBytes(size)
+                val cut = minOf(2, size)
+                val parts = listOf(data.copyOfRange(0, cut), data.copyOfRange(cut, size), byteArrayOf())
+                val reference = Cipher.getInstance("AES/GCM/NoPadding")
+                reference.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, makeIv(counter = 127L + index)))
+                reference.updateAAD(length)
+                val encrypted = sender.encryptPacket(length, parts)
+                assertArrayEquals(reference.doFinal(data), encrypted)
+                assertArrayEquals(data, receiver.decryptPacket(length, encrypted))
+            }
+            val length = packetLengthBytes(0)
+            assertArrayEquals(byteArrayOf(), receiver.decryptPacket(length, sender.encryptPacket(length, emptyList())))
+        }
+    }
+
+    @Test
+    fun contiguousDecryptionMatchesJceAcrossBlockBoundariesAndNonces() {
+        for (keySize in listOf(16, 32)) {
+            val key = ByteArray(keySize) { it.toByte() }
+            val receiver = AesGcmCipher(key.copyOf(), makeIv(counter = 127))
+            for ((index, size) in listOf(0, 1, 15, 16, 17, 31, 32, 33, 1023, 32768).withIndex()) {
+                val data = ByteArray(size) { (it + index).toByte() }
+                val length = packetLengthBytes(size)
+                val reference = Cipher.getInstance("AES/GCM/NoPadding")
+                reference.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, makeIv(counter = 127L + index)))
+                reference.updateAAD(length)
+                val encrypted = reference.doFinal(data)
+                val original = encrypted.copyOf()
+                val view = ByteBuffer.wrap(receiver.decryptPacket(length, encrypted))
+                assertArrayEquals(original, encrypted)
+                assertEquals(size, view.capacity())
+                assertEquals(size, view.remaining())
+                val decoded = ByteArray(size)
+                view.get(decoded)
+                assertArrayEquals(data, decoded)
+            }
+        }
+    }
+
+    @Test
+    fun contiguousDecryptionDoesNotAdvanceNonceOnFailure() {
+        for (keySize in listOf(16, 32)) {
+            val key = ByteArray(keySize) { it.toByte() }
+            val data = ByteArray(32768) { it.toByte() }
+            val length = packetLengthBytes(data.size)
+            val encrypted = AesGcmCipher(key.copyOf(), makeIv()).encryptPacket(length, data)
+            val receiver = AesGcmCipher(key.copyOf(), makeIv())
+            val changed = encrypted.copyOf()
+            changed[changed.lastIndex] = (changed.last().toInt() xor 1).toByte()
+            assertFailsWith<TransportException> { receiver.decryptPacket(length, changed) }
+            assertFailsWith<TransportException> { receiver.decryptPacket(length, ByteArray(15)) }
+            val view = ByteBuffer.wrap(receiver.decryptPacket(length, encrypted))
+            val decoded = ByteArray(view.remaining())
+            view.get(decoded)
+            assertArrayEquals(data, decoded)
+        }
+    }
+
+    @Test
+    fun contiguousDecryptionRejectsTamperingAndTruncatedTags() {
+        for (keySize in listOf(16, 32)) {
+            val key = ByteArray(keySize) { it.toByte() }
+            val plaintext = ByteArray(32768) { it.toByte() }
+            val length = packetLengthBytes(plaintext.size)
+            val encrypted = AesGcmCipher(key.copyOf(), makeIv()).encryptPacket(length, plaintext)
+            for (offset in listOf(0, encrypted.lastIndex)) {
+                val changed = encrypted.copyOf()
+                changed[offset] = (changed[offset].toInt() xor 1).toByte()
+                assertFailsWith<TransportException> { AesGcmCipher(key.copyOf(), makeIv()).decryptPacket(length, changed) }
+            }
+            assertFailsWith<TransportException> { AesGcmCipher(key.copyOf(), makeIv()).decryptPacket(length, ByteArray(15)) }
+        }
     }
 
     @Test
