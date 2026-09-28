@@ -60,6 +60,7 @@ class SshClientConfig private constructor(
     val obscureKeystrokeTimingIntervalMs: Long,
     val autoDisconnectOnLastChannelClose: Boolean,
     val sessionWindowSize: Int,
+    val sftpWindowSize: Int,
 ) {
     class Builder {
         /**
@@ -136,12 +137,20 @@ class SshClientConfig private constructor(
         var autoDisconnectOnLastChannelClose: Boolean = true
 
         /**
-         * Receive window, in bytes, for session channels: shells, commands and subsystems such as
-         * SFTP. A channel moves at most one window of data per network round trip, so a larger
-         * window speeds up bulk transfers on slower links. Each channel may buffer up to this much
-         * unread data. Default: 2 MiB. Reduce this for sessions with tighter memory limits.
+         * Receive window, in bytes, for shells, commands and manually opened subsystems.
+         * SFTP channels opened by [SshClient.openSftp] use [sftpWindowSize]. A channel moves at most
+         * one window of data per network round trip, so a larger window speeds up bulk transfers
+         * on slower links. Each channel may buffer up to this much unread data. Default: 2 MiB.
+         * Reduce this for sessions with tighter memory limits.
          */
         var sessionWindowSize: Int = 2 * 1024 * 1024
+
+        /**
+         * Receive window, in bytes, for channels opened by [SshClient.openSftp].
+         * Default: 8 MiB, to sustain bulk downloads on higher-latency links.
+         * Each channel may buffer up to this much unread data; reduce this for tighter memory limits.
+         */
+        var sftpWindowSize: Int = 8 * 1024 * 1024
 
         fun build(): SshClientConfig {
             val factory = transportFactory ?: run {
@@ -153,6 +162,7 @@ class SshClientConfig private constructor(
                 "obscureKeystrokeTimingIntervalMs must be non-negative"
             }
             require(sessionWindowSize > 0) { "sessionWindowSize must be positive" }
+            require(sftpWindowSize > 0) { "sftpWindowSize must be positive" }
 
             val verifier = hostKeyVerifier
             requireNotNull(verifier) { "hostKeyVerifier must be set" }
@@ -177,6 +187,7 @@ class SshClientConfig private constructor(
                 obscureKeystrokeTimingIntervalMs,
                 autoDisconnectOnLastChannelClose,
                 sessionWindowSize,
+                sftpWindowSize,
             )
         }
     }

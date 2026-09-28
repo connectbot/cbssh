@@ -3121,7 +3121,7 @@ class SshConnection(
         maxPacketSize: Int = 32 * 1024,
     ): SessionChannel? = openSessionChannel(initialWindowSize, maxPacketSize, bufferedStdout = false)
 
-    internal suspend fun openBufferedSessionChannel(): SessionChannel? = openSessionChannel(sessionWindowSize, 32 * 1024, bufferedStdout = true)
+    internal suspend fun openBufferedSessionChannel(initialWindowSize: Int): SessionChannel? = openSessionChannel(initialWindowSize, 32 * 1024, bufferedStdout = true)
 
     private suspend fun openSessionChannel(initialWindowSize: Int, maxPacketSize: Int, bufferedStdout: Boolean): SessionChannel? {
         val localChannelNumber = allocateChannelNumber()

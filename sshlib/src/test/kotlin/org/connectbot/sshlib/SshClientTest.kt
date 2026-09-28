@@ -353,31 +353,41 @@ class SshClientTest {
     }
 
     @Test
-    fun `SshClientConfig defaults session window to two mebibytes`() {
+    fun `SshClientConfig defaults session and SFTP windows independently`() {
         val config = SshClientConfig {
             host = "example.com"
             hostKeyVerifier = acceptAllVerifier
         }
         assertEquals(2 * 1024 * 1024, config.sessionWindowSize)
+        assertEquals(8 * 1024 * 1024, config.sftpWindowSize)
     }
 
     @Test
-    fun `SshClientConfig custom session window is applied`() {
+    fun `SshClientConfig custom channel windows are applied`() {
         val config = SshClientConfig {
             host = "example.com"
             hostKeyVerifier = acceptAllVerifier
             sessionWindowSize = 64 * 1024
+            sftpWindowSize = 4 * 1024 * 1024
         }
         assertEquals(64 * 1024, config.sessionWindowSize)
+        assertEquals(4 * 1024 * 1024, config.sftpWindowSize)
     }
 
     @Test
-    fun `SshClientConfig rejects non-positive session window`() {
+    fun `SshClientConfig rejects non-positive channel windows`() {
         assertFailsWith<IllegalArgumentException> {
             SshClientConfig {
                 host = "example.com"
                 hostKeyVerifier = acceptAllVerifier
                 sessionWindowSize = 0
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SshClientConfig {
+                host = "example.com"
+                hostKeyVerifier = acceptAllVerifier
+                sftpWindowSize = 0
             }
         }
     }
@@ -416,16 +426,16 @@ class SshClientTest {
     fun `openSftp maps session open and subsystem failures`() = runTest {
         val connection = mockk<SshConnection>(relaxed = true)
         val client = connectedClient(connection, authenticated = true)
-        coEvery { connection.openBufferedSessionChannel() } returns null
+        coEvery { connection.openBufferedSessionChannel(8 * 1024 * 1024) } returns null
         assertIs<SftpResult.ProtocolError>(client.openSftp())
 
         val session = mockk<SessionChannel>(relaxed = true)
-        coEvery { connection.openBufferedSessionChannel() } returns session
+        coEvery { connection.openBufferedSessionChannel(8 * 1024 * 1024) } returns session
         coEvery { session.requestSubsystem("sftp") } returns false
         assertIs<SftpResult.ProtocolError>(client.openSftp())
         verify { session.close() }
 
-        coEvery { connection.openBufferedSessionChannel() } throws IllegalStateException("boom")
+        coEvery { connection.openBufferedSessionChannel(8 * 1024 * 1024) } throws IllegalStateException("boom")
         assertIs<SftpResult.IoError>(client.openSftp())
     }
 

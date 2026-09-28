@@ -453,7 +453,7 @@ class SshClient private constructor(
 
         return try {
             logger.info("Opening SFTP session")
-            val session = conn.openBufferedSessionChannel()
+            val session = conn.openBufferedSessionChannel(config.sftpWindowSize)
                 ?: return SftpResult.ProtocolError("Failed to open session channel for SFTP")
             if (!session.requestSubsystem("sftp")) {
                 session.close()

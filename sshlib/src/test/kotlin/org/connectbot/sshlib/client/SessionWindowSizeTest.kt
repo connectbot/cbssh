@@ -62,6 +62,25 @@ class SessionWindowSizeTest {
     }
 
     @Test
+    fun `SFTP channels advertise eight mebibytes by default`() = runTest {
+        val config = SshClientConfig {
+            host = "example.com"
+            hostKeyVerifier = acceptAllVerifier
+        }
+        assertEquals(8L * 1024 * 1024, advertisedWindow(sessionWindowSize = 64 * 1024, sftpConfig = config))
+    }
+
+    @Test
+    fun `SFTP channels advertise their configured window`() = runTest {
+        val config = SshClientConfig {
+            host = "example.com"
+            hostKeyVerifier = acceptAllVerifier
+            sftpWindowSize = 64 * 1024
+        }
+        assertEquals(64L * 1024, advertisedWindow(sessionWindowSize = 2 * 1024 * 1024, sftpConfig = config))
+    }
+
+    @Test
     fun `SshClient passes the configured window to session channels`(): Unit = runBlocking {
         val (clientTransport, serverTransport) = PipedTransport.create()
         val serverScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -96,7 +115,7 @@ class SessionWindowSizeTest {
     }
 
     /** Opens a session channel on a fresh connection and returns the window it asked for. */
-    private suspend fun TestScope.advertisedWindow(sessionWindowSize: Int?): Long {
+    private suspend fun TestScope.advertisedWindow(sessionWindowSize: Int?, sftpConfig: SshClientConfig? = null): Long {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val (clientTransport, serverTransport) = PipedTransport.create()
         val server = FakeSshServer(serverTransport, backgroundScope, dispatcher)
@@ -120,7 +139,13 @@ class SessionWindowSizeTest {
             server.sendUserauthSuccess()
             assertEquals(AuthResult.Success, withTimeout(5_000) { auth.await() })
 
-            val open = async(dispatcher) { connection.openSessionChannel() }
+            val open = async(dispatcher) {
+                if (sftpConfig != null) {
+                    connection.openBufferedSessionChannel(sftpConfig.sftpWindowSize)
+                } else {
+                    connection.openSessionChannel()
+                }
+            }
             val openRequest = withTimeout(5_000) { server.awaitChannelOpen() }
             server.sendChannelOpenConfirmation(openRequest.senderChannel().toInt(), senderChannel = 100)
             assertNotNull(withTimeout(5_000) { open.await() })
