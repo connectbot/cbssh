@@ -18,10 +18,12 @@
 package org.connectbot.sshlib.client.sftp
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import org.connectbot.sshlib.SftpResult
@@ -34,7 +36,32 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SftpDispatcherTest {
+    @Test
+    fun `next request queues before first transport receipt and awaits its own reply`() = runTest {
+        val transport = FakePacketTransport()
+        val receipt = CompletableDeferred<SftpResult<Unit>>()
+        transport.queuedReceipt = receipt
+        val dispatcher = SftpDispatcher(transport)
+        dispatcher.startReadLoop(backgroundScope)
+        val first = async { dispatcher.request(5, byteArrayOf(1)) }
+        val second = async { dispatcher.request(5, byteArrayOf(2)) }
+        runCurrent()
+        assertEquals(2, transport.writes.size)
+        val ids = transport.writes.map { ByteBuffer.wrap(it.payload).int }
+        assertTrue(ids[0] != ids[1])
+        transport.enqueue(SftpResult.Success(packet(103, ids[1], byteArrayOf(2))))
+        transport.enqueue(SftpResult.Success(packet(103, ids[0], byteArrayOf(1))))
+        runCurrent()
+        assertTrue(!first.isCompleted && !second.isCompleted)
+        receipt.complete(SftpResult.Success(Unit))
+        runCurrent()
+        assertContentEquals(byteArrayOf(1), assertIs<SftpResult.Success<SftpRawPacket>>(first.await()).value.payload)
+        assertContentEquals(byteArrayOf(2), assertIs<SftpResult.Success<SftpRawPacket>>(second.await()).value.payload)
+        dispatcher.stop()
+    }
+
     @Test
     fun `disconnect does not wait for a suspended request write`() = runTest {
         val transport = FakePacketTransport()
@@ -228,6 +255,7 @@ class SftpDispatcherTest {
         val writes = mutableListOf<Write>()
         var writeResult: SftpResult<Unit> = SftpResult.Success(Unit)
         var writeGate: CompletableDeferred<Unit>? = null
+        var queuedReceipt: Deferred<SftpResult<Unit>>? = null
 
         suspend fun awaitWrite(): Write = withTimeout(1_000) {
             while (!firstWrite.isCompleted) {
@@ -247,6 +275,12 @@ class SftpDispatcherTest {
         override suspend fun readPacket(): SftpResult<SftpRawPacket> = when (val event = readEvents.receive()) {
             is ReadEvent.Packet -> event.result
             is ReadEvent.Throw -> throw event.cause
+        }
+
+        override suspend fun queuePacket(type: Int, payload: ByteArray): Deferred<SftpResult<Unit>> {
+            val queued = queuedReceipt ?: return super.queuePacket(type, payload)
+            writePacket(type, payload)
+            return queued
         }
 
         override suspend fun writePacket(type: Int, payload: ByteArray): SftpResult<Unit> {

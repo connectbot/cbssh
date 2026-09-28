@@ -19,9 +19,12 @@ package org.connectbot.sshlib.client.sftp
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.connectbot.sshlib.SessionExit
 import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.SshSession
@@ -29,8 +32,11 @@ import org.junit.jupiter.api.Test
 import java.nio.ByteBuffer
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SftpPacketIOTest {
 
     @Test
@@ -74,6 +80,23 @@ class SftpPacketIOTest {
     }
 
     @Test
+    fun `fragmented bodies exclude adjacent frames and survive later reads`() = runBlocking {
+        val data = ByteArray(65536) { it.toByte() }
+        val wire = packet(103, data) + packet(101, byteArrayOf(7, 8, 9))
+        for (split in listOf(1, 4, 5, 32768, 65540)) {
+            val session = FakeSshSession()
+            session.enqueue(wire.copyOfRange(0, split))
+            session.enqueue(wire.copyOfRange(split, wire.size))
+            val io = SftpPacketIO(session)
+            val first = assertIs<SftpResult.Success<SftpRawPacket>>(io.readPacket()).value
+            val second = assertIs<SftpResult.Success<SftpRawPacket>>(io.readPacket()).value
+            assertEquals(data.size, first.payload.size)
+            assertContentEquals(data, first.payload)
+            assertContentEquals(byteArrayOf(7, 8, 9), second.payload)
+        }
+    }
+
+    @Test
     fun `writePacket serializes length type and payload`() = runBlocking {
         val session = FakeSshSession()
 
@@ -81,6 +104,169 @@ class SftpPacketIOTest {
 
         assertEquals(SftpResult.Success(Unit), result)
         assertContentEquals(byteArrayOf(0, 0, 0, 4, 99, 1, 2, 3), session.writes.single())
+    }
+
+    @Test
+    fun `multipart request framing matches contiguous payload including empty parts`() = runBlocking {
+        for (id in listOf(0, 7, -1, Int.MAX_VALUE)) {
+            for (parts in listOf(emptyList(), listOf(byteArrayOf()), listOf(byteArrayOf(1, 2), byteArrayOf(), ByteArray(65536) { it.toByte() }))) {
+                val session = FakeSshSession()
+                val payload = ByteBuffer.allocate(4 + parts.sumOf { it.size }).putInt(id)
+                parts.forEach { payload.put(it) }
+                val io = SftpPacketIO(session)
+                assertEquals(SftpResult.Success(Unit), io.queueRequest(6, id, parts).await())
+                assertContentEquals(packet(6, payload.array()), session.writes.single())
+            }
+        }
+    }
+
+    @Test
+    fun `queued multipart request snapshots every caller part before transport completion`() = runTest {
+        val session = FakeSshSession()
+        val gate = CompletableDeferred<Unit>()
+        session.writeGate = gate
+        val io = SftpPacketIO(session)
+        io.startWriter(backgroundScope)
+        val first = io.queuePacket(10, byteArrayOf(1))
+        runCurrent()
+        val header = byteArrayOf(1, 2, 3)
+        val data = ByteArray(65536) { it.toByte() }
+        val expected = ByteBuffer.allocate(4 + header.size + data.size).putInt(7).put(header).put(data).array()
+        val request = io.queueRequest(6, 7, listOf(header, data))
+        header.fill(0)
+        data.fill(0)
+        runCurrent()
+        assertFalse(request.isCompleted)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(SftpResult.Success(Unit), first.await())
+        assertEquals(SftpResult.Success(Unit), request.await())
+        assertContentEquals(packet(6, expected), session.writes[1])
+        io.stopWriter()
+    }
+
+    @Test
+    fun `queued frames preserve order and wait for transport completion`() = runTest {
+        val session = FakeSshSession()
+        val gate = CompletableDeferred<Unit>()
+        session.writeGate = gate
+        val io = SftpPacketIO(session)
+        io.startWriter(backgroundScope)
+        val first = io.queuePacket(10, byteArrayOf(1))
+        runCurrent()
+        val second = io.queuePacket(11, byteArrayOf(2))
+        val third = io.queuePacket(12, byteArrayOf(3))
+        runCurrent()
+        assertEquals(1, session.writes.size)
+        assertFalse(first.isCompleted)
+        assertFalse(second.isCompleted)
+        assertFalse(third.isCompleted)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(SftpResult.Success(Unit), first.await())
+        assertEquals(SftpResult.Success(Unit), second.await())
+        assertEquals(SftpResult.Success(Unit), third.await())
+        assertContentEquals(packet(10, byteArrayOf(1)), session.writes[0])
+        assertContentEquals(packet(11, byteArrayOf(2)) + packet(12, byteArrayOf(3)), session.writes[1])
+        io.stopWriter()
+    }
+
+    @Test
+    fun `cancelling a receipt waiter preserves the admitted frame and following frame`() = runTest {
+        val session = FakeSshSession()
+        val gate = CompletableDeferred<Unit>()
+        session.writeGate = gate
+        val io = SftpPacketIO(session)
+        io.startWriter(backgroundScope)
+        val first = io.queuePacket(10, byteArrayOf(1))
+        runCurrent()
+        val waiter = async { first.await() }
+        runCurrent()
+        waiter.cancel()
+        runCurrent()
+        assertFalse(first.isCancelled)
+        val second = io.queuePacket(11, byteArrayOf(2))
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(SftpResult.Success(Unit), first.await())
+        assertEquals(SftpResult.Success(Unit), second.await())
+        assertContentEquals(packet(10, byteArrayOf(1)), session.writes[0])
+        assertContentEquals(packet(11, byteArrayOf(2)), session.writes[1])
+        io.stopWriter()
+    }
+
+    @Test
+    fun `write failure closes stream and fails active queued and future frames`() = runTest {
+        val session = FakeSshSession()
+        val gate = CompletableDeferred<Unit>()
+        session.writeGate = gate
+        val io = SftpPacketIO(session)
+        io.startWriter(backgroundScope)
+        val first = io.queuePacket(10, byteArrayOf(1))
+        runCurrent()
+        val second = io.queuePacket(11, byteArrayOf(2))
+        val failure = IllegalStateException("partial transport write")
+        gate.completeExceptionally(failure)
+        runCurrent()
+        assertEquals(failure.message, assertIs<SftpResult.IoError>(first.await()).cause.message)
+        assertEquals(failure.message, assertIs<SftpResult.IoError>(second.await()).cause.message)
+        assertTrue(session.closed)
+        assertEquals(1, session.writes.size)
+        try {
+            io.queuePacket(12, byteArrayOf(3))
+            error("Closed writer accepted a frame")
+        } catch (expected: IllegalStateException) {
+            assertEquals(failure.message, expected.message)
+        }
+    }
+
+    @Test
+    fun `bounded frame queue backpressures admission and stop wakes blocked writers`() = runTest {
+        val session = FakeSshSession()
+        session.writeGate = CompletableDeferred()
+        val io = SftpPacketIO(session)
+        io.startWriter(backgroundScope)
+        val first = io.queuePacket(10, byteArrayOf())
+        runCurrent()
+        val queued = List(16) { io.queuePacket(11, byteArrayOf()) }
+        val blocked = async { runCatching { io.queuePacket(12, byteArrayOf()) } }
+        runCurrent()
+        assertFalse(blocked.isCompleted)
+        io.stopWriter()
+        runCurrent()
+        assertIs<SftpResult.IoError>(first.await())
+        queued.forEach { assertIs<SftpResult.IoError>(it.await()) }
+        try {
+            blocked.await().getOrThrow()
+            error("Blocked writer survived close")
+        } catch (expected: kotlinx.coroutines.CancellationException) {
+            assertTrue(session.closed)
+        }
+    }
+
+    @Test
+    fun `large frame receipt waits for its complete write before following frame`() = runTest {
+        val session = FakeSshSession()
+        val firstGate = CompletableDeferred<Unit>()
+        val secondGate = CompletableDeferred<Unit>()
+        session.writeGates.addAll(listOf(firstGate, secondGate))
+        val io = SftpPacketIO(session)
+        io.startWriter(backgroundScope)
+        val payload = ByteArray(128 * 1024) { it.toByte() }
+        val first = io.queuePacket(6, payload)
+        runCurrent()
+        assertContentEquals(packet(6, payload), session.writes.single())
+        assertFalse(first.isCompleted)
+        val second = io.queuePacket(7, byteArrayOf(99))
+        firstGate.complete(Unit)
+        runCurrent()
+        assertEquals(SftpResult.Success(Unit), first.await())
+        assertFalse(second.isCompleted)
+        assertContentEquals(packet(7, byteArrayOf(99)), session.writes[1])
+        secondGate.complete(Unit)
+        runCurrent()
+        assertEquals(SftpResult.Success(Unit), second.await())
+        io.stopWriter()
     }
 
     private fun packet(type: Int, payload: ByteArray): ByteArray {
@@ -94,6 +280,9 @@ class SftpPacketIOTest {
     private class FakeSshSession : SshSession {
         private val reads = Channel<ByteArray>(Channel.UNLIMITED)
         val writes = mutableListOf<ByteArray>()
+        var writeGate: CompletableDeferred<Unit>? = null
+        val writeGates = ArrayDeque<CompletableDeferred<Unit>>()
+        var closed = false
 
         override val localChannelNumber: Int = 1
         override val remoteChannelNumber: Int = 2
@@ -134,7 +323,8 @@ class SftpPacketIOTest {
         override suspend fun requestSubsystem(name: String): Boolean = true
 
         override suspend fun write(data: ByteArray) {
-            writes += data
+            writes += data.copyOf()
+            (writeGates.removeFirstOrNull() ?: writeGate)?.await()
         }
 
         override suspend fun read(): ByteArray? = reads.receiveCatching().getOrNull()
@@ -143,6 +333,8 @@ class SftpPacketIOTest {
 
         override suspend fun sendEof() = Unit
 
-        override fun close() = Unit
+        override fun close() {
+            closed = true
+        }
     }
 }

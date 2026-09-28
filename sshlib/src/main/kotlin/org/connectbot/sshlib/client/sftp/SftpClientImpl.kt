@@ -122,12 +122,13 @@ internal class SftpClientImpl private constructor(
     }
 
     override suspend fun write(handle: SftpFileHandle, offset: Long, data: ByteArray): SftpResult<Unit> {
-        val payload = ByteBuffer.allocate(4 + handle.handle.size + 8 + 4 + data.size)
-        putString(payload, handle.handle)
-        payload.putLong(offset)
-        putString(payload, data)
+        val header = ByteBuffer.allocate(4 + handle.handle.size + 8 + 4)
+        putString(header, handle.handle)
+        header.putLong(offset)
+        header.putInt(data.size)
 
-        return dispatchStatusRequest(SSH_FXP_WRITE, payload.array(), stateMachine::writeFile)
+        // Snapshot header and data once into the complete owned frame at queue admission.
+        return dispatchStatusRequest(SSH_FXP_WRITE, listOf(header.array(), data), stateMachine::writeFile)
     }
 
     // --- Stat operations ---
@@ -325,6 +326,13 @@ internal class SftpClientImpl private constructor(
         payload: ByteArray,
         transition: SftpTransition = stateMachine::request,
         map: (SftpRawPacket) -> SftpResult<T>,
+    ): SftpResult<T> = dispatchRequest(type, listOf(payload), transition, map)
+
+    private suspend fun <T> dispatchRequest(
+        type: Int,
+        payload: List<ByteArray>,
+        transition: SftpTransition = stateMachine::request,
+        map: (SftpRawPacket) -> SftpResult<T>,
     ): SftpResult<T> = when (val result = dispatcher.request(type, payload) { action -> transition { action() } }) {
         is SftpResult.Success -> try {
             map(result.value)
@@ -345,6 +353,12 @@ internal class SftpClientImpl private constructor(
     private suspend fun dispatchStatusRequest(
         type: Int,
         payload: ByteArray,
+        transition: SftpTransition = stateMachine::request,
+    ): SftpResult<Unit> = dispatchStatusRequest(type, listOf(payload), transition)
+
+    private suspend fun dispatchStatusRequest(
+        type: Int,
+        payload: List<ByteArray>,
         transition: SftpTransition = stateMachine::request,
     ): SftpResult<Unit> = dispatchRequest(type, payload, transition) { response ->
         if (response.type == SSH_FXP_STATUS) {
