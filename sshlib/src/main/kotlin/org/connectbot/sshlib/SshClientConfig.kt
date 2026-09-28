@@ -139,9 +139,9 @@ class SshClientConfig private constructor(
          * Receive window, in bytes, for session channels: shells, commands and subsystems such as
          * SFTP. A channel moves at most one window of data per network round trip, so a larger
          * window speeds up bulk transfers on slower links. Each channel may buffer up to this much
-         * unread data. OpenSSH and libssh2 use 2 MiB. Default: 64 KiB.
+         * unread data. Default: 2 MiB. Reduce this for sessions with tighter memory limits.
          */
-        var sessionWindowSize: Int = 64 * 1024
+        var sessionWindowSize: Int = 2 * 1024 * 1024
 
         fun build(): SshClientConfig {
             val factory = transportFactory ?: run {

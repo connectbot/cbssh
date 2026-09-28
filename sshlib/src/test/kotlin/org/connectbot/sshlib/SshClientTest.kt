@@ -353,12 +353,12 @@ class SshClientTest {
     }
 
     @Test
-    fun `SshClientConfig defaults session window to sixty-four kibibytes`() {
+    fun `SshClientConfig defaults session window to two mebibytes`() {
         val config = SshClientConfig {
             host = "example.com"
             hostKeyVerifier = acceptAllVerifier
         }
-        assertEquals(64 * 1024, config.sessionWindowSize)
+        assertEquals(2 * 1024 * 1024, config.sessionWindowSize)
     }
 
     @Test
@@ -366,9 +366,9 @@ class SshClientTest {
         val config = SshClientConfig {
             host = "example.com"
             hostKeyVerifier = acceptAllVerifier
-            sessionWindowSize = 2 * 1024 * 1024
+            sessionWindowSize = 64 * 1024
         }
-        assertEquals(2 * 1024 * 1024, config.sessionWindowSize)
+        assertEquals(64 * 1024, config.sessionWindowSize)
     }
 
     @Test

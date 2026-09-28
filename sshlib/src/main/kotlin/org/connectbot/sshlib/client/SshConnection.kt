@@ -260,7 +260,7 @@ class SshConnection(
     internal var autoDisconnectOnLastChannelClose: Boolean = true
 
     /** Default receive window for [openSessionChannel], set from `SshClientConfig.sessionWindowSize`. */
-    internal var sessionWindowSize: Int = 64 * 1024
+    internal var sessionWindowSize: Int = 2 * 1024 * 1024
 
     companion object {
         private val logger = LoggerFactory.getLogger(SshConnection::class.java)

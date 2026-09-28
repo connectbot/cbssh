@@ -31,12 +31,18 @@ import org.connectbot.sshlib.SshException
 internal class LocalChannelWindow(
     private val initialSize: Int,
     remoteInitial: Long = 0,
+    private val adjustmentThreshold: Int = 1,
 ) {
     companion object {
         const val MAX_WINDOW_SIZE = 0xFFFFFFFFL
     }
 
+    init {
+        require(adjustmentThreshold in 1..initialSize)
+    }
+
     private var localRemaining: Long = initialSize.toLong()
+    private var releasedLocal: Int = 0
 
     @Volatile var remoteRemaining: Long = remoteInitial
         private set
@@ -54,16 +60,21 @@ internal class LocalChannelWindow(
     }
 
     /**
-     * Release locally consumed bytes and return the window credit to advertise.
+     * Release locally consumed bytes and return batched window credit to advertise.
+     * Returns zero until the threshold is reached; unreleased credit still limits ingress.
      */
     @Synchronized
     fun releaseLocal(size: Int): Int {
         if (size <= 0) throw SshException("Local window release must be positive: $size")
-        if (localRemaining + size > initialSize) {
+        if (localRemaining + releasedLocal + size > initialSize) {
             throw SshException("Local window release exceeds initial size")
         }
-        localRemaining += size
-        return size
+        releasedLocal += size
+        if (releasedLocal < adjustmentThreshold) return 0
+        val adjustment = releasedLocal
+        releasedLocal = 0
+        localRemaining += adjustment
+        return adjustment
     }
 
     /**

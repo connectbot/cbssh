@@ -52,13 +52,13 @@ class SessionWindowSizeTest {
     }
 
     @Test
-    fun `session channels advertise sixty-four kibibytes by default`() = runTest {
-        assertEquals(64L * 1024, advertisedWindow(sessionWindowSize = null))
+    fun `session channels advertise two mebibytes by default`() = runTest {
+        assertEquals(2L * 1024 * 1024, advertisedWindow(sessionWindowSize = null))
     }
 
     @Test
     fun `session channels advertise the configured window`() = runTest {
-        assertEquals(2L * 1024 * 1024, advertisedWindow(sessionWindowSize = 2 * 1024 * 1024))
+        assertEquals(64L * 1024, advertisedWindow(sessionWindowSize = 64 * 1024))
     }
 
     @Test

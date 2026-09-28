@@ -25,6 +25,19 @@ import kotlin.test.assertFailsWith
 class LocalChannelWindowTest {
 
     @Test
+    fun `batched credit stays unavailable to the peer until advertised`() {
+        val window = LocalChannelWindow(initialSize = 1024, adjustmentThreshold = 512)
+        window.consumeLocal(1024)
+        assertEquals(0, window.releaseLocal(256))
+        assertFailsWith<SshException> { window.consumeLocal(1) }
+        assertEquals(512, window.releaseLocal(256))
+        window.consumeLocal(512)
+        assertEquals(512, window.releaseLocal(512))
+        assertEquals(512, window.releaseLocal(512))
+        assertFailsWith<SshException> { window.releaseLocal(1) }
+    }
+
+    @Test
     fun `consumeLocal rejects data exceeding window`() {
         val w = LocalChannelWindow(initialSize = 1024)
         assertFailsWith<SshException> { w.consumeLocal(1025) }

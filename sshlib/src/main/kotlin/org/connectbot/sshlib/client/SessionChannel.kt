@@ -61,7 +61,11 @@ class SessionChannel internal constructor(
         private val logger = LoggerFactory.getLogger(SessionChannel::class.java)
     }
 
-    private val window = LocalChannelWindow(initialWindowSize, remoteInitial = remoteWindowSizeInitial)
+    private val window = LocalChannelWindow(
+        initialWindowSize,
+        remoteInitial = remoteWindowSizeInitial,
+        adjustmentThreshold = maxOf(1, initialWindowSize / 2),
+    )
     private val windowAvailable = Channel<Unit>(Channel.CONFLATED)
 
     private val stdoutIngress = Channel<ByteArray>(Channel.UNLIMITED)
@@ -155,7 +159,7 @@ class SessionChannel internal constructor(
             for (value in ingress) {
                 output.send(value)
                 val adjust = window.releaseLocal(sizeOf(value))
-                if (inboundDeliveryOpen) {
+                if (inboundDeliveryOpen && adjust > 0) {
                     connection.sendWindowAdjust(_remoteChannelNumber, adjust)
                 }
             }
