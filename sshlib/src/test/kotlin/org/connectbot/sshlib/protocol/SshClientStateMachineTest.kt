@@ -28,6 +28,48 @@ import kotlin.test.assertTrue
 
 class SshClientStateMachineTest {
     @Test
+    fun `lifecycle queries track initial exchange authentication rekey and disconnect`() = runTest {
+        val machine = SshClientStateMachine(RecordingCallbacks())
+        assertFalse(machine.isKexInProgress())
+        assertFalse(machine.isPostAuthenticated())
+        assertFalse(machine.isDisconnected())
+        assertTrue(machine.connect())
+        assertFalse(machine.isKexInProgress())
+        assertTrue(machine.receiveVersion(IdBanner()))
+        assertTrue(machine.isKexInProgress())
+        assertTrue(machine.isWaitingForKexInit())
+        assertTrue(machine.receiveKexInit(SshMsgKexinit()))
+        assertTrue(machine.isKexInProgress())
+        assertFalse(machine.isWaitingForKexInit())
+        assertTrue(machine.receiveKexEcdhReply(SshMsgKexEcdhReply()))
+        assertTrue(machine.isKexInProgress())
+        assertTrue(machine.hostKeyVerified())
+        assertTrue(machine.isKexInProgress())
+        assertTrue(machine.receiveNewKeys())
+        assertFalse(machine.isKexInProgress())
+        assertFalse(machine.isPostAuthenticated())
+        assertTrue(machine.receiveServiceAccept("ssh-userauth"))
+        assertTrue(machine.isPostAuthenticated())
+        assertTrue(machine.beginAuthentication())
+        assertTrue(machine.authenticationSuccess())
+        assertTrue(machine.isPostAuthenticated())
+        assertTrue(machine.requestRekey())
+        assertFalse(machine.isPostAuthenticated())
+        assertTrue(machine.isKexInProgress())
+        assertTrue(machine.isWaitingForKexInit())
+        assertTrue(machine.receiveKexInit(SshMsgKexinit()))
+        assertTrue(machine.receiveKexEcdhReply(SshMsgKexEcdhReply()))
+        assertTrue(machine.hostKeyVerified())
+        assertTrue(machine.receiveNewKeys())
+        assertFalse(machine.isKexInProgress())
+        assertTrue(machine.isPostAuthenticated())
+        assertTrue(machine.disconnect())
+        assertTrue(machine.isDisconnected())
+        assertFalse(machine.isPostAuthenticated())
+        assertFalse(machine.isKexInProgress())
+    }
+
+    @Test
     fun `host key completion is required before NEWKEYS and cannot be replayed`() = runTest {
         val callbacks = RecordingCallbacks()
         val machine = SshClientStateMachine(callbacks)

@@ -24,7 +24,6 @@ import ru.nsk.kstatemachine.state.HistoryState
 import ru.nsk.kstatemachine.state.HistoryType
 import ru.nsk.kstatemachine.state.IState
 import ru.nsk.kstatemachine.state.State
-import ru.nsk.kstatemachine.state.activeStates
 import ru.nsk.kstatemachine.state.finalState
 import ru.nsk.kstatemachine.state.historyState
 import ru.nsk.kstatemachine.state.initialState
@@ -589,6 +588,20 @@ internal class SshClientStateMachine(
         ) { callbacks.disconnect() }
     }
 
+    // Resolve configured state objects once. Queries always read KStateMachine's own activity.
+    private val postAuthenticatedState = namedState("PostAuthenticated")
+    private val waitingForKexInitState = namedState("WaitKexInit")
+    private val disconnectedState = namedState("Disconnected")
+    private val keyExchangeStates = arrayOf(
+        waitingForKexInitState,
+        namedState("WaitKex"),
+        namedState("WaitKexDhGexInit"),
+        namedState("WaitHostKey"),
+        namedState("WaitNewKeys"),
+    )
+
+    private fun namedState(name: String): IState = stateMachine.states.single { it.name == name }
+
     private inline fun <reified E : SshEvent> IState.formalTransition(
         id: SshTransitionId,
         targetState: State? = null,
@@ -705,15 +718,13 @@ internal class SshClientStateMachine(
 
     suspend fun unexpectedKexInit(description: String): Boolean = process(SshEvent.UnexpectedKexInit(description))
 
-    fun isPostAuthenticated(): Boolean = stateMachine.activeStates().any { it.name == "PostAuthenticated" }
+    fun isPostAuthenticated(): Boolean = postAuthenticatedState.isActive
 
-    fun isKexInProgress(): Boolean = stateMachine.activeStates().any {
-        it.name == "WaitKexInit" || it.name == "WaitKex" || it.name == "WaitKexDhGexInit" || it.name == "WaitHostKey" || it.name == "WaitNewKeys"
-    }
+    fun isKexInProgress(): Boolean = keyExchangeStates.any { it.isActive }
 
-    fun isWaitingForKexInit(): Boolean = stateMachine.activeStates().any { it.name == "WaitKexInit" }
+    fun isWaitingForKexInit(): Boolean = waitingForKexInitState.isActive
 
-    fun isDisconnected(): Boolean = stateMachine.activeStates().any { it.name == "Disconnected" }
+    fun isDisconnected(): Boolean = disconnectedState.isActive
 
     fun isStrictKexEnabled(): Boolean = strictKexEnabled
 
