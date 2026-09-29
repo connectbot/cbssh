@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Release
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: read
+  checks: read
+  statuses: read
+
+jobs:
+  prepare:
+    if: github.event.label.name == 'release:prepare'
+    uses: connectbot/release-action/.github/workflows/prepare-release.yml@main
+    with:
+      tag_prefix: "v"
+      gradle_no_push_prop: "cbssh.release.noPush"
+    secrets: inherit
+
+  publish:
+    if: github.event.label.name == 'release:publish'
+    uses: connectbot/release-action/.github/workflows/publish-release.yml@main
+    with:
+      tag_prefix: "v"
+    secrets: inherit
+
+  branch:
+    if: github.event.label.name == 'release:branch'
+    uses: connectbot/release-action/.github/workflows/release-branch.yml@main
+    secrets: inherit
