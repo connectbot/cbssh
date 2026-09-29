@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.5.0][0.5.0]
+
+Changes for library users since `0.4.2`.
+
+### Added
+
+- Added support for reading OpenSSH private keys encrypted with
+  `aes128-gcm@openssh.com` and `aes256-gcm@openssh.com`.
+- Added `SshClientConfig.sessionWindowSize` and `SshClientConfig.sftpWindowSize`
+  to configure receive windows for session channels and channels opened by
+  `SshClient.openSftp` independently.
+
+### Changed
+
+- Increased default receive windows from 64 KiB to 2 MiB for session channels
+  and 8 MiB for SFTP channels to improve throughput on higher-latency connections.
+- Improved SSH and SFTP transfer performance by batching channel writes and
+  receive-window updates, pipelining SFTP frames, and reducing buffer copies
+  and allocations.
+- Serialized protocol decisions independently of transport writes, keeping
+  incoming packet processing and shutdown responsive under backpressure.
+
+### Fixed
+
+- Prevented valid packets arriving during suspended writes from causing
+  spurious disconnects by serializing complete connection state transitions.
+- Preserved reply ordering when requests are cancelled after being admitted
+  for transmission.
+- Released SFTP lifecycle locks before waiting for writes to prevent deadlocks
+  under transport or channel-window backpressure.
+- Cancelled pending remote forwarding handlers and released sockets and
+  selector resources when forwarding ends or fails.
+- Improved Android key compatibility by falling back to JVM Base64 operations
+  when Android calls fail and accepting Ed25519 private keys with PKCS#8
+  encodings regardless of their implementation class name.
+
 ## [0.4.2][0.4.2]
 
 Changes for library users since `0.4.1`.
@@ -123,6 +159,7 @@ Changes for library users since `0.2.1`.
 - Limited zlib decompression output per packet to reduce decompression-bomb
   denial-of-service risk.
 
+[0.5.0]: https://github.com/connectbot/cbssh/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/connectbot/cbssh/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/connectbot/cbssh/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/connectbot/cbssh/compare/v0.3.1...v0.4.0
