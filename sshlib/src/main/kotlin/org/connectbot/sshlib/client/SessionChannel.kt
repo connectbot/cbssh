@@ -17,6 +17,7 @@
 
 package org.connectbot.sshlib.client
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -88,6 +89,10 @@ class SessionChannel internal constructor(
                         _stdout.send(buffer.toByteArray())
                         stdoutBufferConsumed.trySend(Unit)
                     }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    _stdout.close(failure)
                 } finally {
                     _stdout.close()
                 }
@@ -215,6 +220,11 @@ class SessionChannel internal constructor(
                     connection.sendWindowAdjust(_remoteChannelNumber, adjust)
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            output.close(failure)
+            connection.transportFailed(failure)
         } finally {
             output.close()
         }

@@ -35,6 +35,19 @@ import kotlin.test.assertFailsWith
 class SshConnectionCloseTest {
 
     @Test
+    fun `failing nested transport close still completes shutdown exactly once`() = runTest {
+        val transport = RecordingTransport(failClose = true)
+        val connection = connection(transport, StandardTestDispatcher(testScheduler))
+
+        connection.close()
+        connection.close()
+
+        assertEquals(1, transport.closeCalls)
+        assertFailsWith<TransportException> { connection.sendChannelClose(recipientChannel = 0) }
+        assertEquals(0, transport.writeCalls)
+    }
+
+    @Test
     fun `concurrent close closes transport once`() = runTest {
         val transport = RecordingTransport(suspendClose = true)
         val connection = connection(transport, StandardTestDispatcher(testScheduler))
@@ -74,6 +87,7 @@ class SshConnectionCloseTest {
 
     private class RecordingTransport(
         private val suspendClose: Boolean = false,
+        private val failClose: Boolean = false,
     ) : Transport {
         val closeStarted = CompletableDeferred<Unit>()
         val allowClose = CompletableDeferred<Unit>()
@@ -93,6 +107,7 @@ class SshConnectionCloseTest {
             closeCalls++
             closeStarted.complete(Unit)
             if (suspendClose) allowClose.await()
+            if (failClose) throw TransportException("Upstream packet writer stopped")
         }
     }
 }
