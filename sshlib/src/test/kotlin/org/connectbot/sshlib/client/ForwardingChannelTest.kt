@@ -172,6 +172,19 @@ class ForwardingChannelTest {
     }
 
     @Test
+    fun `data arriving after local close is discarded until the peer closes`() = runTest {
+        // RFC 4254 5.3: the peer may still send data until it answers CHANNEL_CLOSE.
+        val (channel, conn) = createChannel()
+
+        channel.close()
+        channel.onData("late".toByteArray())
+        channel.onClose()
+
+        assertTrue(channel.incomingData.receiveCatching().isClosed)
+        coVerify(exactly = 0) { conn.sendWindowAdjust(any(), any()) }
+    }
+
+    @Test
     fun `close sends channel close and marks not open`() = runTest {
         val (channel, conn) = createChannel()
         assertTrue(channel.isOpen)

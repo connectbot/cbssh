@@ -456,6 +456,27 @@ class SshConnectionFlowTest {
     }
 
     @Test
+    fun `data for a locally closed session leaves the connection and other sessions usable`() = runTest {
+        connectedFixture { connection, server, dispatcher ->
+            authenticate(connection, server, dispatcher)
+            val closing = openSession(connection, server, dispatcher, remoteChannelNumber = 100)
+            val other = openSession(connection, server, dispatcher, remoteChannelNumber = 101)
+
+            closing.close()
+            // In flight before the server sees our CLOSE (RFC 4254 5.3).
+            server.sendChannelData(closing.localChannelNumber, byteArrayOf(1, 2, 3))
+            server.sendChannelExtendedData(closing.localChannelNumber, 1, byteArrayOf(4))
+            server.sendChannelData(other.localChannelNumber, byteArrayOf(5, 6))
+
+            assertContentEquals(byteArrayOf(5, 6), withTimeout(5_000) { other.stdout.receive() })
+            server.sendChannelClose(closing.localChannelNumber)
+            server.sendChannelData(other.localChannelNumber, byteArrayOf(7))
+            assertContentEquals(byteArrayOf(7), withTimeout(5_000) { other.stdout.receive() })
+            assertTrue(other.isOpen)
+        }
+    }
+
+    @Test
     fun `session channel preserves data received before close until consumer reads`() = runTest {
         connectedFixture { connection, server, dispatcher ->
             connection.autoDisconnectOnLastChannelClose = false

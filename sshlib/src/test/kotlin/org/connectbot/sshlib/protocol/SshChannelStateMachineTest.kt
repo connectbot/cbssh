@@ -182,6 +182,20 @@ class SshChannelStateMachineTest {
     }
 
     @Test
+    fun `data after local close is accepted without delivery`() = runTest {
+        val machine = SshChannelStateMachine(SshChannelState.OPEN)
+        var openEffects = emptySet<SshChannelEffect>()
+        var closeSentEffects = setOf(SshChannelEffect.DELIVER_DATA)
+
+        assertTrue(machine.receiveData { openEffects = it.effects })
+        assertTrue(machine.sendClose {})
+        assertTrue(machine.receiveData { closeSentEffects = it.effects })
+
+        assertTrue(SshChannelEffect.DELIVER_DATA in openEffects)
+        assertTrue(closeSentEffects.isEmpty())
+    }
+
+    @Test
     fun `remote close is terminal and duplicate close is rejected`() = runTest {
         val machine = SshChannelStateMachine(SshChannelState.OPEN)
 
