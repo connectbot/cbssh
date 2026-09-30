@@ -172,7 +172,10 @@ class SessionChannel internal constructor(
     }
 
     private suspend fun receiveStdout(size: Int, enqueue: () -> Boolean) {
-        if (!lifecycle.receiveData {
+        if (!lifecycle.receiveData { transition ->
+                // After a local CLOSE the peer may still send data until its own CLOSE arrives
+                // (RFC 4254 5.3). The lifecycle accepts it without DELIVER_DATA: nobody reads it.
+                if (SshChannelEffect.DELIVER_DATA !in transition.effects) return@receiveData
                 window.consumeLocal(size)
                 if (!enqueue()) {
                     throw org.connectbot.sshlib.SshException("Received data for a closed stdout stream")
@@ -184,7 +187,8 @@ class SessionChannel internal constructor(
     }
 
     internal suspend fun onExtendedData(dataType: Int, data: ByteArray) {
-        if (!lifecycle.receiveData {
+        if (!lifecycle.receiveData { transition ->
+                if (SshChannelEffect.DELIVER_DATA !in transition.effects) return@receiveData
                 window.consumeLocal(data.size)
                 if (dataType == 1) {
                     if (stderrIngress.trySend(data).isFailure) {
