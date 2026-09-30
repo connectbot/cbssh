@@ -358,7 +358,7 @@ class SshConnection(
     internal val connectionScope = CoroutineScope(SupervisorJob() + coroutineDispatcher)
     private val protocolScope = CoroutineScope(SupervisorJob() + stateMachineDispatcher)
     internal val protocolExecutor = ProtocolExecutor(protocolScope, stateMachineDispatcher)
-    private val outboundPacketController = PacketWriter(connectionScope, stateMachineDispatcher, packetIO, ::writerFailed)
+    private val outboundPacketController = PacketWriter(connectionScope, stateMachineDispatcher, packetIO, ::transportFailed)
     private val closeMutex = Mutex()
     private var transportClosing = false
 
@@ -521,7 +521,8 @@ class SshConnection(
         outboundPacketController.writePacket(messageType, payload)
     }
 
-    private suspend fun writerFailed(failure: Throwable) {
+    /** Background channel delivery has no caller to receive failed window-update writes. */
+    internal suspend fun transportFailed(failure: Throwable) {
         if (transportClosing || !connectionScope.isActive) return
         protocolScope.launch {
             _disconnectedFlow.tryEmit(failure)
@@ -538,6 +539,10 @@ class SshConnection(
                 transportClosing = true
                 try {
                     transport.close()
+                } catch (failure: Exception) {
+                    // A nested SSH transport may send CHANNEL_CLOSE on an upstream that has
+                    // already disconnected. Cleanup must still terminate our own protocol loop.
+                    logger.debug("Transport close failed", failure)
                 } finally {
                     outboundPacketController.close()
                 }

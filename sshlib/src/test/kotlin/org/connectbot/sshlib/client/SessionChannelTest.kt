@@ -29,6 +29,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.connectbot.sshlib.SshException
+import org.connectbot.sshlib.transport.TransportException
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -39,6 +40,23 @@ import kotlin.test.assertFailsWith
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionChannelTest {
+
+    @Test
+    fun `failed window update closes stdout with its cause instead of escaping the worker`() = runTest {
+        for (buffered in listOf(false, true)) {
+            val conn = mockk<SshConnection>(relaxed = true)
+            val failure = TransportException("Transport closed")
+            coEvery { conn.sendWindowAdjust(any(), any()) } throws failure
+            val (channel, _) = createChannel(connection = conn, initialWindowSize = 128, bufferedStdout = buffered)
+
+            channel.onData(ByteArray(100))
+            assertEquals(100, channel.stdout.receive().size)
+
+            assertEquals(failure.message, channel.stdout.receiveCatching().exceptionOrNull()?.message)
+            coVerify(exactly = 1) { conn.transportFailed(failure) }
+            channel.close()
+        }
+    }
 
     private fun createChannel(
         connection: SshConnection = mockk(relaxed = true),

@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.connectbot.sshlib.SshException
+import org.connectbot.sshlib.transport.TransportException
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -32,6 +33,20 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertFailsWith
 
 class ForwardingChannelTest {
+
+    @Test
+    fun `failed window update closes delivery with its cause instead of escaping the worker`() = runTest {
+        val conn = mockk<SshConnection>(relaxed = true)
+        val failure = TransportException("Transport closed")
+        coEvery { conn.sendWindowAdjust(any(), any()) } throws failure
+        val (channel, _) = createChannel(connection = conn, initialWindowSize = 128)
+
+        channel.onData(ByteArray(100))
+        assertEquals(100, channel.incomingData.receive().size)
+
+        assertEquals(failure.message, channel.incomingData.receiveCatching().exceptionOrNull()?.message)
+        coVerify(exactly = 1) { conn.transportFailed(failure) }
+    }
 
     private fun createChannel(
         connection: SshConnection = mockk(relaxed = true),

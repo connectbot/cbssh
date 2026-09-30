@@ -17,6 +17,7 @@
 
 package org.connectbot.sshlib.client
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -61,6 +62,13 @@ internal class ForwardingChannel(
                     connection.sendWindowAdjust(remoteChannelNumber, adjust)
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // Writes admitted before cancellation may fail with a transport error instead of
+            // CancellationException. Surface it to readers and the connection, never globally.
+            _incomingData.close(failure)
+            connection.transportFailed(failure)
         } finally {
             _incomingData.close()
         }
