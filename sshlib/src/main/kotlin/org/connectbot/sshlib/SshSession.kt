@@ -53,7 +53,13 @@ interface SshSession : AutoCloseable {
     val remoteChannelNumber: Int
     val isOpen: Boolean
 
+    /**
+     * Standard output. Data received before remote channel close remains readable through
+     * automatic connection teardown. Explicit session close or client disconnect discards it.
+     */
     val stdout: ReceiveChannel<ByteArray>
+
+    /** Standard error, with the same drain and explicit-close contract as [stdout]. */
     val stderr: ReceiveChannel<ByteArray>
 
     suspend fun requestPty(
@@ -127,5 +133,6 @@ interface SshSession : AutoCloseable {
      */
     val exitInfo: Deferred<SessionExit?>
 
+    /** Discard unread output and release delivery resources, including after remote close. */
     override fun close()
 }

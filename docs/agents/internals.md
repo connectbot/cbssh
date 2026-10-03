@@ -120,6 +120,15 @@ races, deadlocks, or thread starvation.
   the final DISCONNECT receipt, bounded to five seconds; explicit connection close still aborts.
 - Byte-limit rekey checks run in the owner without local admission permits or write waits.
   The packet reader drains buffered packets before triggering another exchange.
+- Session and forwarding delivery use per-channel `ChannelDelivery` scopes, tracked by the
+  connection's resource ledger independently of packet routing. Remote CLOSE seals ingress and
+  retains unread output through network shutdown. Drain completion retires delivery; explicit
+  session close or client disconnect aborts it, clears queues, and releases all retained workers.
+  Network shutdown never waits for consumers. Explicit connection close joins delivery outside
+  the protocol owner. Lazy buffered stdout adapters use delivery ownership too.
+- Outbound window-credit admission is a channel-state-machine operation, allowed only while the
+  peer can still send data. A write receipt admitted before remote CLOSE may fail during automatic
+  teardown without invalidating the retained tail; failures on open channels still fail transport.
 - `PacketWriter` is the sole binary packet writer. Its bounded ordinary queue and reserved control
   capacity preserve KEX progress under backpressure. Local admission is bounded separately so
   packet input and shutdown can always enter the owner. Exhausting protocol-generated output

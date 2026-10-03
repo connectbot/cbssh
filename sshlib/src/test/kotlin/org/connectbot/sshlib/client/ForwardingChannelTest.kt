@@ -23,18 +23,17 @@ import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.connectbot.sshlib.SshException
+import org.connectbot.sshlib.protocol.DeferredIo
 import org.connectbot.sshlib.transport.TransportException
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -53,8 +52,8 @@ class ForwardingChannelTest {
         val finishUpdate = CompletableDeferred<Unit>()
         coEvery { conn.sendWindowAdjust(any(), any()) } coAnswers {
             updateStarted.complete(Unit)
-            // An admitted write can finish after the delivery worker has been cancelled.
-            withContext(NonCancellable) { finishUpdate.await() }
+            // Model PacketWriter admission: the receipt is awaited OUTSIDE the lifecycle lock.
+            currentCoroutineContext()[DeferredIo]!!.add(finishUpdate)
         }
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
         val (channel, _) = createChannel(connection = conn, initialWindowSize = 128, connectionScope = scope)
@@ -63,16 +62,15 @@ class ForwardingChannelTest {
             channel.onData(byteArrayOf(1))
             assertEquals(100, channel.incomingData.receive().size)
             withTimeout(5_000) { updateStarted.await() }
-            val deliveryJobs = scope.coroutineContext[Job]!!.children.toList()
+            val deliveryJobs = channel.delivery.job.children.toList()
 
             channel.close()
             runCurrent()
-            // The gate still holds the first packet's update while the second packet is queued.
-            assertTrue(deliveryJobs.any { !it.isCompleted })
-            finishUpdate.complete(Unit)
+            // Cancelling delivery does not cancel an already admitted packet's write receipt.
+            assertFalse(finishUpdate.isCompleted)
             withTimeout(5_000) { deliveryJobs.forEach { it.join() } }
-
             assertTrue(deliveryJobs.all { it.isCancelled })
+            finishUpdate.complete(Unit)
             assertTrue(channel.incomingData.receiveCatching().isClosed)
             assertTrue(scope.isActive)
             coVerify(exactly = 1) { conn.sendWindowAdjust(1, 100) }
@@ -95,7 +93,7 @@ class ForwardingChannelTest {
         assertEquals(100, channel.incomingData.receive().size)
 
         assertEquals(failure.message, channel.incomingData.receiveCatching().exceptionOrNull()?.message)
-        coVerify(exactly = 1) { conn.transportFailed(failure) }
+        coVerify(exactly = 1) { conn.transportFailed(match { it.message == failure.message }) }
     }
 
     private fun createChannel(

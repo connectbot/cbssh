@@ -85,6 +85,7 @@ class SshChannelStateMachineTest {
             SshChannelEventId.SEND_DATA,
             SshChannelEventId.SEND_EOF,
             SshChannelEventId.SEND_REQUEST,
+            SshChannelEventId.SEND_WINDOW_ADJUST,
         )
         val packetEvents = SshChannelEventId.entries.toSet() - localEvents - SshChannelEventId.DISCONNECT
 
@@ -155,6 +156,29 @@ class SshChannelStateMachineTest {
         assertEquals(SshChannelState.BOTH_EOF, machine.state)
         assertFalse(machine.sendData {})
         assertFalse(machine.receiveData {})
+    }
+
+    @Test
+    fun `window credit is admitted only while peer may send data`() = runTest {
+        for (sendEof in listOf(false, true)) {
+            val machine = SshChannelStateMachine(SshChannelState.OPEN)
+            var credits = 0
+            if (sendEof) machine.sendEof { }
+            assertTrue(
+                machine.sendWindowAdjust { transition ->
+                    assertEquals(setOf(SshChannelEffect.SEND_WINDOW_ADJUST), transition.effects)
+                    credits++
+                },
+            )
+            machine.receiveEof { }
+            assertFalse(machine.sendWindowAdjust { credits++ })
+            machine.receiveClose { }
+            assertFalse(machine.sendWindowAdjust { credits++ })
+            assertEquals(1, credits)
+        }
+        val locallyClosed = SshChannelStateMachine(SshChannelState.OPEN)
+        locallyClosed.sendClose { }
+        assertFalse(locallyClosed.sendWindowAdjust { error("Must not write credit after local CLOSE") })
     }
 
     @Test

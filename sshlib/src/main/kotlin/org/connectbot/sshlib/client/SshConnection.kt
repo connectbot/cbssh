@@ -355,6 +355,7 @@ class SshConnection(
 
     private val stateMachine = SshClientStateMachine(callbacks)
     private val inboundPacketController = InboundPacketController()
+    internal val deliveryResources = ChannelDeliveryResources()
     internal val connectionScope = CoroutineScope(SupervisorJob() + coroutineDispatcher)
     private val protocolScope = CoroutineScope(SupervisorJob() + stateMachineDispatcher)
     internal val protocolExecutor = ProtocolExecutor(protocolScope, stateMachineDispatcher)
@@ -2079,6 +2080,7 @@ class SshConnection(
             closeTransport()
             packetLoopJob?.join()
             packetLoopJob = null
+            deliveryResources.close()
 
             if (!protocolExecutor.isClosed) {
                 protocolExecutor.run(awaitWrites = false) {

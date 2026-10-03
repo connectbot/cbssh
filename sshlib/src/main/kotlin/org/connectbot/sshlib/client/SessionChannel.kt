@@ -80,16 +80,25 @@ class SessionChannel internal constructor(
     private val stdoutBuffers = Channel<ByteBuffer>(Channel.RENDEZVOUS, onUndeliveredElement = {
         stdoutBufferConsumed.trySend(Unit)
     })
-    private var stdoutAdapterJob: Job? = null
+    private val _stderr = Channel<ByteArray>(Channel.RENDEZVOUS)
+    private val _extendedData = Channel<Pair<Int, ByteArray>>(Channel.RENDEZVOUS)
+
+    @Volatile private var inboundDeliveryOpen = true
+    internal val delivery = ChannelDelivery(connectionScope.coroutineContext)
+
     private val arrayStdout by lazy {
         if (bufferedStdout) {
-            stdoutAdapterJob = connectionScope.launch {
+            val adapter = delivery.launch {
                 try {
                     for (buffer in stdoutBuffers) {
                         _stdout.send(buffer.toByteArray())
                         stdoutBufferConsumed.trySend(Unit)
                     }
                 } catch (cancelled: CancellationException) {
+                    // Cancelling the public array stream abandons its buffer too. Do not leave
+                    // the buffer pump waiting forever for acknowledgement from this adapter.
+                    stdoutBufferConsumed.cancel(cancelled)
+                    stdoutBuffers.cancel(cancelled)
                     throw cancelled
                 } catch (failure: Exception) {
                     _stdout.close(failure)
@@ -97,26 +106,38 @@ class SessionChannel internal constructor(
                     _stdout.close()
                 }
             }
+            // All buffers may have drained through readBuffer(), or explicit close may have
+            // retired delivery before the public array adapter was first requested.
+            if (adapter == null) _stdout.close()
         }
         _stdout
     }
-    private val _stderr = Channel<ByteArray>(Channel.RENDEZVOUS)
-    private val _extendedData = Channel<Pair<Int, ByteArray>>(Channel.RENDEZVOUS)
 
-    @Volatile private var inboundDeliveryOpen = true
-
-    private val stdoutDeliveryJob = connectionScope.launch {
-        if (bufferedStdout) {
-            deliverData(stdoutBufferIngress, stdoutBuffers, { it.remaining() }) { stdoutBufferConsumed.receive() }
-        } else {
-            deliverData(stdoutIngress, _stdout, { it.size })
+    init {
+        delivery.launch {
+            if (bufferedStdout) {
+                deliverData(stdoutBufferIngress, stdoutBuffers, { it.remaining() }) { stdoutBufferConsumed.receive() }
+            } else {
+                deliverData(stdoutIngress, _stdout, { it.size })
+            }
         }
-    }
-    private val stderrDeliveryJob = connectionScope.launch {
-        deliverData(stderrIngress, _stderr, { it.size })
-    }
-    private val extendedDeliveryJob = connectionScope.launch {
-        deliverData(extendedDataIngress, _extendedData, { it.second.size })
+        delivery.launch { deliverData(stderrIngress, _stderr, { it.size }) }
+        delivery.launch { deliverData(extendedDataIngress, _extendedData, { it.second.size }) }
+        delivery.initialize(
+            abortStreams = {
+                inboundDeliveryOpen = false
+                stdoutIngress.cancel()
+                stdoutBufferIngress.cancel()
+                stderrIngress.cancel()
+                extendedDataIngress.cancel()
+                stdoutBuffers.close()
+                stdoutBufferConsumed.close()
+                _stdout.close()
+                _stderr.close()
+                _extendedData.close()
+            },
+            resources = connection.deliveryResources,
+        )
     }
 
     // AutoCloseable.close() cannot await the owner. Publish the local API close request
@@ -221,7 +242,15 @@ class SessionChannel internal constructor(
                 awaitConsumption()
                 val adjust = if (size == 0) 0 else window.releaseLocal(size)
                 if (inboundDeliveryOpen && adjust > 0) {
-                    connection.sendWindowAdjust(_remoteChannelNumber, adjust)
+                    try {
+                        lifecycle.sendWindowAdjust { connection.sendWindowAdjust(_remoteChannelNumber, adjust) }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        // A write admitted before remote CLOSE may fail when auto-disconnect
+                        // tears down the writer. That obsolete credit must not drop the tail.
+                        if (lifecycle.state != SshChannelState.CLOSED || delivery.isAborted) throw failure
+                    }
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -277,19 +306,11 @@ class SessionChannel internal constructor(
         stdoutBufferIngress.close()
         stderrIngress.close()
         extendedDataIngress.close()
+        delivery.finish()
     }
 
     private fun abortInboundDelivery() {
-        finishInboundDelivery()
-        stdoutDeliveryJob.cancel()
-        stdoutAdapterJob?.cancel()
-        stdoutBuffers.close()
-        stdoutBufferConsumed.close()
-        stderrDeliveryJob.cancel()
-        extendedDeliveryJob.cancel()
-        _stdout.close()
-        _stderr.close()
-        _extendedData.close()
+        delivery.abort()
     }
 
     private suspend fun closeResources(replyRequired: Boolean, preserveInbound: Boolean, reason: String) {
@@ -593,6 +614,10 @@ class SessionChannel internal constructor(
             }
             // A remote CLOSE makes sendClose a no-op, but close() still owns
             // releasing any unread delivery job retained for graceful draining.
+            abortInboundDelivery()
+            windowAvailable.close()
+            _exitInfo.complete(null)
+        }.invokeOnCompletion {
             abortInboundDelivery()
             windowAvailable.close()
             _exitInfo.complete(null)

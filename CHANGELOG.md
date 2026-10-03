@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Preserved unread session and forwarding output through automatic connection teardown after
+  remote channel close, including exec stderr and buffered SFTP responses (#317).
+- Released retained delivery workers and buffers on explicit session close or client disconnect,
+  including when the network has already shut down.
+
 ## [0.5.0][0.5.0]
 
 Changes for library users since `0.4.2`.

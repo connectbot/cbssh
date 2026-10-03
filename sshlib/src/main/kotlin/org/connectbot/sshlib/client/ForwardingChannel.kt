@@ -21,7 +21,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.launch
 import org.connectbot.sshlib.SshException
 import org.connectbot.sshlib.protocol.SshChannelEffect
 import org.connectbot.sshlib.protocol.SshChannelState
@@ -53,25 +52,42 @@ internal class ForwardingChannel(
 
     @Volatile private var inboundDeliveryOpen = true
     val incomingData: ReceiveChannel<ByteArray> get() = _incomingData
-    private val incomingDeliveryJob = connectionScope.launch {
-        try {
-            for (data in incomingIngress) {
-                _incomingData.send(data)
-                val adjust = window.releaseLocal(data.size)
-                if (inboundDeliveryOpen) {
-                    connection.sendWindowAdjust(remoteChannelNumber, adjust)
+    internal val delivery = ChannelDelivery(connectionScope.coroutineContext)
+    init {
+        delivery.launch {
+            try {
+                for (data in incomingIngress) {
+                    _incomingData.send(data)
+                    val adjust = window.releaseLocal(data.size)
+                    if (inboundDeliveryOpen) {
+                        try {
+                            lifecycle.sendWindowAdjust { connection.sendWindowAdjust(remoteChannelNumber, adjust) }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            if (lifecycle.state != SshChannelState.CLOSED || delivery.isAborted) throw failure
+                        }
+                    }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // Writes admitted before cancellation may fail with a transport error instead of
+                // CancellationException. Surface it to readers and the connection, never globally.
+                _incomingData.close(failure)
+                connection.transportFailed(failure)
+            } finally {
+                _incomingData.close()
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            // Writes admitted before cancellation may fail with a transport error instead of
-            // CancellationException. Surface it to readers and the connection, never globally.
-            _incomingData.close(failure)
-            connection.transportFailed(failure)
-        } finally {
-            _incomingData.close()
         }
+        delivery.initialize(
+            abortStreams = {
+                inboundDeliveryOpen = false
+                incomingIngress.cancel()
+                _incomingData.close()
+            },
+            resources = connection.deliveryResources,
+        )
     }
 
     val isOpen: Boolean get() = lifecycle.isOpen
@@ -148,12 +164,11 @@ internal class ForwardingChannel(
     private fun finishInboundDelivery() {
         inboundDeliveryOpen = false
         incomingIngress.close()
+        delivery.finish()
     }
 
     private fun abortInboundDelivery() {
-        finishInboundDelivery()
-        incomingDeliveryJob.cancel()
-        _incomingData.close()
+        delivery.abort()
     }
 
     suspend fun sendData(data: ByteArray) {
@@ -182,17 +197,20 @@ internal class ForwardingChannel(
     }
 
     suspend fun close() {
-        lifecycle.sendClose { transition ->
+        try {
+            if (lifecycle.state == SshChannelState.CLOSED) return
+            lifecycle.sendClose { transition ->
+                abortInboundDelivery()
+                windowAvailable.close()
+                connection.sendChannelClose(remoteChannelNumber)
+                if (SshChannelEffect.CLOSE_CHANNEL in transition.effects) {
+                    connection.notifyChannelClosed(localChannelNumber)
+                }
+            }
+        } finally {
+            // Also release unread delivery after remote CLOSE or protocol-owner shutdown.
             abortInboundDelivery()
             windowAvailable.close()
-            connection.sendChannelClose(remoteChannelNumber)
-            if (SshChannelEffect.CLOSE_CHANNEL in transition.effects) {
-                connection.notifyChannelClosed(localChannelNumber)
-            }
         }
-        // A remote CLOSE makes sendClose a no-op, but close() still owns
-        // releasing any unread delivery job retained for graceful draining.
-        abortInboundDelivery()
-        windowAvailable.close()
     }
 }

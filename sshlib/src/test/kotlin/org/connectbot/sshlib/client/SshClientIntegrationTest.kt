@@ -17,6 +17,7 @@
 
 package org.connectbot.sshlib.client
 
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -37,6 +38,7 @@ import org.connectbot.sshlib.SshClientConfig
 import org.connectbot.sshlib.SshException
 import org.connectbot.sshlib.SshSigning
 import org.connectbot.sshlib.blocking.BlockingSshClient
+import org.connectbot.sshlib.transport.KtorTcpTransportFactory
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -862,6 +864,38 @@ class SshClientIntegrationTest {
         } finally {
             client.disconnect()
         }
+    }
+
+    @Test
+    fun `exec stderr remains readable after automatic network teardown`() = runBlocking {
+        val config = SshClientConfig {
+            host = opensshContainer.host
+            port = opensshContainer.getMappedPort(22)
+            hostKeyVerifier = acceptAllVerifier
+        }
+        val transport = KtorTcpTransportFactory(opensshContainer.host, opensshContainer.getMappedPort(22)).create()
+        val connection = SshConnection(transport = transport, hostKeyVerifier = acceptAllVerifier)
+        // Keep access to the network job for the barrier; authentication, exec, and output use
+        // the same public client/session APIs as ordinary callers.
+        val client = SshClient.createForTesting(config, initialTransport = transport, initialConnection = connection)
+        try {
+            assertIs<ConnectResult.Success>(connection.connect())
+            assertEquals(AuthResult.Success, client.authenticatePassword(USERNAME, PASSWORD))
+            val session = kotlin.test.assertNotNull(client.openSession())
+            assertTrue(session.requestExec("printf 'oops\\n' >&2; exit 3"))
+            withTimeout(10_000) { connection.connectionScope.coroutineContext[Job]!!.join() }
+            assertFalse(client.isAuthenticated)
+            assertFalse(session.isOpen)
+            val output = withTimeout(5_000) {
+                buildString { for (chunk in session.stderr) append(chunk.decodeToString()) }
+            }
+            assertEquals("oops\n", output)
+            assertEquals(SessionExit.Status(3), session.exitInfo.await())
+            session.close()
+        } finally {
+            client.disconnect()
+        }
+        assertEquals(0, connection.deliveryResources.size)
     }
 
     @Test

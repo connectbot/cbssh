@@ -66,6 +66,7 @@ internal enum class SshChannelEffect {
     SEND_OPEN,
     SEND_OPEN_CONFIRMATION,
     SEND_REQUEST,
+    SEND_WINDOW_ADJUST,
 }
 
 internal enum class SshChannelConstructionId {
@@ -90,6 +91,7 @@ internal enum class SshChannelEventId(
     SEND_DATA("SendData"),
     SEND_EOF("SendEof"),
     SEND_REQUEST("SendRequest"),
+    SEND_WINDOW_ADJUST("SendWindowAdjust"),
 }
 
 internal enum class SshChannelEventOrigin {
@@ -112,6 +114,8 @@ internal enum class SshChannelTransitionId {
     SEND_DATA_REMOTE_EOF,
     RECEIVE_DATA_OPEN,
     RECEIVE_DATA_LOCAL_EOF,
+    SEND_WINDOW_ADJUST_OPEN,
+    SEND_WINDOW_ADJUST_LOCAL_EOF,
     SEND_REQUEST_OPEN,
     SEND_REQUEST_LOCAL_EOF,
     SEND_REQUEST_REMOTE_EOF,
@@ -294,6 +298,13 @@ internal class SshChannelStateMachine(
                 SshChannelEventOrigin.PARSED_PACKET,
                 action,
             )
+        class SendWindowAdjust(action: suspend (SshChannelAcceptedTransition) -> Unit) :
+            ChannelEvent(
+                SshChannelEventId.SEND_WINDOW_ADJUST,
+                setOf(SshChannelEffect.SEND_WINDOW_ADJUST),
+                SshChannelEventOrigin.LOCAL_COMMAND,
+                action,
+            )
         class SendEof(action: suspend (SshChannelAcceptedTransition) -> Unit) :
             ChannelEvent(
                 SshChannelEventId.SEND_EOF,
@@ -390,6 +401,9 @@ internal class SshChannelStateMachine(
         remoteEof.channelTransition(ChannelEvent.ReceiveWindowAdjust {}, SshChannelTransitionId.RECEIVE_WINDOW_ADJUST_REMOTE_EOF)
         bothEof.channelTransition(ChannelEvent.ReceiveWindowAdjust {}, SshChannelTransitionId.RECEIVE_WINDOW_ADJUST_BOTH_EOF)
 
+        open.channelTransition(ChannelEvent.SendWindowAdjust {}, SshChannelTransitionId.SEND_WINDOW_ADJUST_OPEN)
+        localEof.channelTransition(ChannelEvent.SendWindowAdjust {}, SshChannelTransitionId.SEND_WINDOW_ADJUST_LOCAL_EOF)
+
         open.channelTransition(ChannelEvent.SendEof {}, SshChannelTransitionId.SEND_EOF_OPEN, localEof)
         remoteEof.channelTransition(ChannelEvent.SendEof {}, SshChannelTransitionId.SEND_EOF_REMOTE_EOF, bothEof)
         open.channelTransition(ChannelEvent.ReceiveEof {}, SshChannelTransitionId.RECEIVE_EOF_OPEN, remoteEof)
@@ -436,6 +450,7 @@ internal class SshChannelStateMachine(
     suspend fun sendRequest(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.SendRequest(action))
     suspend fun receiveRequest(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.ReceiveRequest(action))
     suspend fun receiveWindowAdjust(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.ReceiveWindowAdjust(action))
+    suspend fun sendWindowAdjust(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.SendWindowAdjust(action))
     suspend fun sendEof(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.SendEof(action))
     suspend fun receiveEof(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.ReceiveEof(action))
     suspend fun sendClose(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.SendClose(action))
