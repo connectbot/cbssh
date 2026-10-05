@@ -20,9 +20,20 @@ package org.connectbot.sshlib.client
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.connectbot.sshlib.SshException
 import org.connectbot.sshlib.transport.TransportException
 import org.junit.jupiter.api.Assertions.assertArrayEquals
@@ -33,6 +44,45 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertFailsWith
 
 class ForwardingChannelTest {
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `local close during an admitted window update cancels delivery without failing the connection`() = runTest {
+        val conn = mockk<SshConnection>(relaxed = true)
+        val updateStarted = CompletableDeferred<Unit>()
+        val finishUpdate = CompletableDeferred<Unit>()
+        coEvery { conn.sendWindowAdjust(any(), any()) } coAnswers {
+            updateStarted.complete(Unit)
+            // An admitted write can finish after the delivery worker has been cancelled.
+            withContext(NonCancellable) { finishUpdate.await() }
+        }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val (channel, _) = createChannel(connection = conn, initialWindowSize = 128, connectionScope = scope)
+        try {
+            channel.onData(ByteArray(100))
+            channel.onData(byteArrayOf(1))
+            assertEquals(100, channel.incomingData.receive().size)
+            withTimeout(5_000) { updateStarted.await() }
+            val deliveryJobs = scope.coroutineContext[Job]!!.children.toList()
+
+            channel.close()
+            runCurrent()
+            // The gate still holds the first packet's update while the second packet is queued.
+            assertTrue(deliveryJobs.any { !it.isCompleted })
+            finishUpdate.complete(Unit)
+            withTimeout(5_000) { deliveryJobs.forEach { it.join() } }
+
+            assertTrue(deliveryJobs.all { it.isCancelled })
+            assertTrue(channel.incomingData.receiveCatching().isClosed)
+            assertTrue(scope.isActive)
+            coVerify(exactly = 1) { conn.sendWindowAdjust(1, 100) }
+            coVerify(exactly = 0) { conn.transportFailed(any()) }
+        } finally {
+            finishUpdate.complete(Unit)
+            channel.close()
+            scope.cancel()
+        }
+    }
 
     @Test
     fun `failed window update closes delivery with its cause instead of escaping the worker`() = runTest {
@@ -53,10 +103,11 @@ class ForwardingChannelTest {
         remoteWindowSize: Long = 64 * 1024,
         maxPacketSize: Int = 32 * 1024,
         initialWindowSize: Int = 256 * 1024,
+        connectionScope: CoroutineScope = CoroutineScope(UnconfinedTestDispatcher()),
     ): Pair<ForwardingChannel, SshConnection> {
         val channel = ForwardingChannel(
             connection = connection,
-            connectionScope = CoroutineScope(UnconfinedTestDispatcher()),
+            connectionScope = connectionScope,
             localChannelNumber = 0,
             remoteChannelNumber = 1,
             maxPacketSize = maxPacketSize,

@@ -24,10 +24,18 @@ import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.connectbot.sshlib.SshException
 import org.connectbot.sshlib.transport.TransportException
 import org.junit.jupiter.api.Assertions.assertArrayEquals
@@ -35,11 +43,53 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.nio.ByteBuffer
 import kotlin.test.assertFailsWith
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionChannelTest {
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `local close during an admitted window update cancels delivery without failing the connection`(buffered: Boolean) = runTest {
+        val conn = mockk<SshConnection>(relaxed = true)
+        val updateStarted = CompletableDeferred<Unit>()
+        val finishUpdate = CompletableDeferred<Unit>()
+        coEvery { conn.sendWindowAdjust(any(), any()) } coAnswers {
+            updateStarted.complete(Unit)
+            // An admitted write can finish after the delivery worker has been cancelled.
+            withContext(NonCancellable) { finishUpdate.await() }
+        }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val (channel, _) = createChannel(conn, initialWindowSize = 128, bufferedStdout = buffered, connectionScope = scope)
+        val stdout = channel.stdout
+        try {
+            channel.onData(ByteArray(100))
+            channel.onData(byteArrayOf(1))
+            assertEquals(100, stdout.receive().size)
+            withTimeout(5_000) { updateStarted.await() }
+            val deliveryJobs = scope.coroutineContext[Job]!!.children.toList()
+
+            channel.close()
+            runCurrent()
+            // The gate still holds the first packet's update while the second packet is queued.
+            assertTrue(deliveryJobs.any { !it.isCompleted })
+            finishUpdate.complete(Unit)
+            withTimeout(5_000) { deliveryJobs.forEach { it.join() } }
+
+            assertTrue(deliveryJobs.all { it.isCancelled })
+            assertTrue(stdout.receiveCatching().isClosed)
+            assertTrue(scope.isActive)
+            coVerify(exactly = 1) { conn.sendWindowAdjust(1, 100) }
+            coVerify(exactly = 0) { conn.transportFailed(any()) }
+        } finally {
+            finishUpdate.complete(Unit)
+            channel.close()
+            scope.cancel()
+        }
+    }
 
     @Test
     fun `failed window update closes stdout with its cause instead of escaping the worker`() = runTest {

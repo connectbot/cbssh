@@ -21,11 +21,14 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -45,7 +48,10 @@ import org.connectbot.sshlib.PublicKey
 import org.connectbot.sshlib.SessionExit
 import org.connectbot.sshlib.crypto.PrivateKeyReader
 import org.connectbot.sshlib.crypto.SshPublicKeyEncoder
+import org.connectbot.sshlib.protocol.ChannelRequestShell
 import org.connectbot.sshlib.transport.PipedTransport
+import org.connectbot.sshlib.transport.Transport
+import org.connectbot.sshlib.transport.TransportException
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
@@ -55,6 +61,7 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -66,6 +73,49 @@ class SshConnectionFlowTest {
 
     private val acceptAllVerifier = object : HostKeyVerifier {
         override suspend fun verify(key: PublicKey): Boolean = true
+    }
+
+    @Test
+    fun `throwing transport close terminates an established connection and its pending request`() = runTest {
+        var closeCalls = 0
+        connectedFixture(
+            wrapTransport = { delegate ->
+                object : Transport by delegate {
+                    override suspend fun close() {
+                        closeCalls++
+                        delegate.close()
+                        throw TransportException("Upstream packet writer stopped")
+                    }
+                }
+            },
+        ) { connection, server, dispatcher ->
+            authenticate(connection, server, dispatcher)
+            val session = openSession(connection, server, dispatcher)
+            val pending = assertNotNull(
+                connection.beginChannelRequest(session.remoteChannelNumber, "shell", wantReply = true) {
+                    it.setRequestSpecificFields(ChannelRequestShell().apply { _check() })
+                },
+            )
+            // Observing the request on the wire proves it is admitted and waiting for a peer reply.
+            val request = withTimeout(5_000) { server.awaitChannelRequest() }
+            assertEquals("shell", request.requestType().value())
+            assertFalse(pending.isCompleted)
+            val workers = connection.connectionScope.coroutineContext[Job]!!.children.toList()
+
+            connection.close()
+            connection.close()
+            runCurrent()
+
+            assertEquals(1, closeCalls)
+            assertTrue(pending.isCompleted)
+            assertFailsWith<Exception> { pending.await() }
+            assertTrue(connection.protocolExecutor.isClosed)
+            assertFalse(connection.connectionScope.isActive)
+            assertTrue(workers.all { it.isCompleted })
+            assertFalse(session.isOpen)
+            assertTrue(session.stdout.receiveCatching().isClosed)
+            assertFailsWith<TransportException> { connection.sendChannelClose(session.remoteChannelNumber) }
+        }
     }
 
     @Test
@@ -895,6 +945,7 @@ class SshConnectionFlowTest {
     }
 
     private suspend fun TestScope.connectedFixture(
+        wrapTransport: (Transport) -> Transport = { it },
         block: suspend (SshConnection, FakeSshServer, CoroutineDispatcher) -> Unit,
     ) {
         val dispatcher = StandardTestDispatcher(testScheduler)
@@ -903,7 +954,7 @@ class SshConnectionFlowTest {
         server.start()
 
         val connection = SshConnection(
-            transport = clientTransport,
+            transport = wrapTransport(clientTransport),
             hostKeyVerifier = acceptAllVerifier,
             rekeyIntervalMs = Long.MAX_VALUE,
             rekeyBytesLimit = Long.MAX_VALUE,
