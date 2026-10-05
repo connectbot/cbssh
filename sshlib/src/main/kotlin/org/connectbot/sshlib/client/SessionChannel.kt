@@ -17,6 +17,7 @@
 
 package org.connectbot.sshlib.client
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -88,6 +89,10 @@ class SessionChannel internal constructor(
                         _stdout.send(buffer.toByteArray())
                         stdoutBufferConsumed.trySend(Unit)
                     }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    _stdout.close(failure)
                 } finally {
                     _stdout.close()
                 }
@@ -172,7 +177,10 @@ class SessionChannel internal constructor(
     }
 
     private suspend fun receiveStdout(size: Int, enqueue: () -> Boolean) {
-        if (!lifecycle.receiveData {
+        if (!lifecycle.receiveData { transition ->
+                // After a local CLOSE the peer may still send data until its own CLOSE arrives
+                // (RFC 4254 5.3). The lifecycle accepts it without DELIVER_DATA: nobody reads it.
+                if (SshChannelEffect.DELIVER_DATA !in transition.effects) return@receiveData
                 window.consumeLocal(size)
                 if (!enqueue()) {
                     throw org.connectbot.sshlib.SshException("Received data for a closed stdout stream")
@@ -184,7 +192,8 @@ class SessionChannel internal constructor(
     }
 
     internal suspend fun onExtendedData(dataType: Int, data: ByteArray) {
-        if (!lifecycle.receiveData {
+        if (!lifecycle.receiveData { transition ->
+                if (SshChannelEffect.DELIVER_DATA !in transition.effects) return@receiveData
                 window.consumeLocal(data.size)
                 if (dataType == 1) {
                     if (stderrIngress.trySend(data).isFailure) {
@@ -215,6 +224,11 @@ class SessionChannel internal constructor(
                     connection.sendWindowAdjust(_remoteChannelNumber, adjust)
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            output.close(failure)
+            connection.transportFailed(failure)
         } finally {
             output.close()
         }

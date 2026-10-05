@@ -17,6 +17,7 @@
 
 package org.connectbot.sshlib.client
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -61,6 +62,13 @@ internal class ForwardingChannel(
                     connection.sendWindowAdjust(remoteChannelNumber, adjust)
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // Writes admitted before cancellation may fail with a transport error instead of
+            // CancellationException. Surface it to readers and the connection, never globally.
+            _incomingData.close(failure)
+            connection.transportFailed(failure)
         } finally {
             _incomingData.close()
         }
@@ -69,7 +77,10 @@ internal class ForwardingChannel(
     val isOpen: Boolean get() = lifecycle.isOpen
 
     internal suspend fun onData(data: ByteArray) {
-        if (!lifecycle.receiveData {
+        if (!lifecycle.receiveData { transition ->
+                // After a local CLOSE the peer may still send data until its own CLOSE arrives
+                // (RFC 4254 5.3). The lifecycle accepts it without DELIVER_DATA: nobody reads it.
+                if (SshChannelEffect.DELIVER_DATA !in transition.effects) return@receiveData
                 window.consumeLocal(data.size)
                 if (incomingIngress.trySend(data).isFailure) {
                     throw org.connectbot.sshlib.SshException("Received data for a closed forwarding stream")
