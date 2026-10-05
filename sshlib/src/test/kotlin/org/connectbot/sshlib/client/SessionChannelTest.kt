@@ -351,6 +351,32 @@ class SessionChannelTest {
     }
 
     @Test
+    fun `data arriving after local close is discarded until the peer closes`() = runTest {
+        // RFC 4254 5.3: the peer may still send data until it answers CHANNEL_CLOSE.
+        val (channel, conn) = createChannel()
+
+        channel.close()
+        channel.onData("late".toByteArray())
+        channel.onExtendedData(1, "late err".toByteArray())
+        channel.onExtendedData(7, "late ext".toByteArray())
+        channel.onClose()
+
+        assertTrue(channel.stdout.receiveCatching().isClosed)
+        assertTrue(channel.stderr.receiveCatching().isClosed)
+        coVerify(exactly = 0) { conn.sendWindowAdjust(any(), any()) }
+    }
+
+    @Test
+    fun `buffered data arriving after local close is discarded`() = runTest {
+        val (channel, _) = createChannel(bufferedStdout = true)
+
+        channel.close()
+        channel.onData(ByteBuffer.wrap("late".toByteArray()))
+
+        assertTrue(channel.stdout.receiveCatching().isClosed)
+    }
+
+    @Test
     fun `close marks channel not open and sends channel close`() = runTest {
         val (channel, conn) = createChannel()
         assertTrue(channel.isOpen)
