@@ -1,6 +1,6 @@
 /*
  * ConnectBot SSH Library
- * Copyright 2025 Kenny Root
+ * Copyright 2025-2026 Kenny Root
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -192,6 +192,23 @@ class JavaMlKemProviderTest {
     }
 
     private fun validX509(): ByteArray = JavaMlKemProvider.wrapRawMlKemPublicKey(ByteArray(1184))
+
+    @Test
+    fun `native ML-KEM decapsulates ciphertext from Kotlin provider`() {
+        val native = nativeProvider()
+        val keyPair = native.generateKeyPair()
+        val encapsulation = KyberKotlinMlKemProvider().encapsulate(keyPair.publicKey)
+        assertContentEquals(encapsulation.sharedSecret, native.decapsulate(keyPair.privateKey, encapsulation.ciphertext))
+    }
+
+    @Test
+    fun `Kotlin ML-KEM decapsulates ciphertext from native provider`() {
+        val native = nativeProvider()
+        val kotlin = KyberKotlinMlKemProvider()
+        val keyPair = kotlin.generateKeyPair()
+        val encapsulation = native.encapsulate(keyPair.publicKey)
+        assertContentEquals(encapsulation.sharedSecret, kotlin.decapsulate(keyPair.privateKey, encapsulation.ciphertext))
+    }
 
     private fun nativeProvider(): JavaMlKemProvider {
         val result = runCatching { JavaMlKemProvider() }
