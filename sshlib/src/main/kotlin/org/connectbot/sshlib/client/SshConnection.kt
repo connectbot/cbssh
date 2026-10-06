@@ -299,6 +299,8 @@ class SshConnection(
 
     private class HostKeyRejectedException(val key: PublicKey) : Exception("Host key rejected")
 
+    private class KeyExchangeFailedException(message: String, cause: Throwable) : SshException(message, cause)
+
     private class ProtocolViolationException(
         message: String,
         cause: Throwable? = null,
@@ -1427,11 +1429,16 @@ class SshConnection(
 
     private suspend fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply) {
         logger.info("Received ECDH_REPLY from server")
-        completeKex(
-            serverHostKey = msg.kS().data(),
-            serverPublicKey = msg.qS().data(),
-            signature = msg.signatureH().data(),
-        )
+        try {
+            completeKex(
+                serverHostKey = msg.kS().data(),
+                serverPublicKey = msg.qS().data(),
+                signature = msg.signatureH().data(),
+            )
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            throw KeyExchangeFailedException(e.message ?: "Key exchange failed", e)
+        }
     }
 
     private suspend fun completeKex(serverHostKey: ByteArray, serverPublicKey: ByteArray, signature: ByteArray) {
@@ -2831,7 +2838,11 @@ class SshConnection(
                                 msgId == SshEnums.KexEcdh.SSH_MSG_KEX_ECDH_REPLY.id().toInt() -> {
                                 val stream = ByteBufferKaitaiStream(rawBody)
                                 val ecdhPayload = KexEcdhPayload(stream)
-                                ecdhPayload._read()
+                                try {
+                                    ecdhPayload._read()
+                                } catch (e: Exception) {
+                                    throw KeyExchangeFailedException("Malformed key exchange reply", e)
+                                }
                                 val ecdhReply = ecdhPayload.body() as SshMsgKexEcdhReply
                                 requireAccepted(stateMachine.receiveKexEcdhReply(ecdhReply), msgType)
                             }
@@ -3017,13 +3028,17 @@ class SshConnection(
     }
 
     private suspend fun sendProtocolError(description: String) {
+        sendErrorDisconnect(SshEnums.DisconnectReason.SSH_DISCONNECT_PROTOCOL_ERROR, description)
+    }
+
+    private suspend fun sendErrorDisconnect(reason: SshEnums.DisconnectReason, description: String): Deferred<Unit> {
         val msg = SshMsgDisconnect().apply {
-            setReasonCode(SshEnums.DisconnectReason.SSH_DISCONNECT_PROTOCOL_ERROR)
+            setReasonCode(reason)
             setDescription(createUtf8String(description))
             setLanguage(createAsciiString(""))
             _check()
         }
-        writePacket(
+        return outboundPacketController.writePacket(
             SshEnums.MessageType.SSH_MSG_DISCONNECT.id().toInt(),
             msg.toByteArray(),
         )
@@ -3052,13 +3067,25 @@ class SshConnection(
             } catch (_: CancellationException) {
                 logger.debug("Packet loop cancelled")
             } catch (e: Exception) {
-                if (e is ProtocolViolationException) {
+                if (e is ProtocolViolationException || e is KeyExchangeFailedException) {
                     try {
-                        if (!e.responseSent) {
+                        if (e is KeyExchangeFailedException) {
+                            // Register the effect with the protocol owner, then await its write
+                            // outside the owner before closing (RFC 10042 section 2.1).
+                            withTimeout(5_000L) {
+                                val receipt = protocolExecutor.run(awaitWrites = false) {
+                                    sendErrorDisconnect(
+                                        SshEnums.DisconnectReason.SSH_DISCONNECT_KEY_EXCHANGE_FAILED,
+                                        e.message ?: "Key exchange failed",
+                                    )
+                                }
+                                receipt.await()
+                            }
+                        } else if (e is ProtocolViolationException && !e.responseSent) {
                             sendProtocolError(e.message ?: "Unexpected SSH packet")
                         }
                     } catch (sendFailure: Exception) {
-                        logger.debug("Failed to send protocol-error disconnect", sendFailure)
+                        logger.debug("Failed to send error disconnect", sendFailure)
                     } finally {
                         isRekeying = false
                         authRequestPending = false

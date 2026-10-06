@@ -31,10 +31,12 @@ import kotlinx.coroutines.sync.withLock
 import org.connectbot.sshlib.crypto.CipherEntry
 import org.connectbot.sshlib.crypto.EncryptionInstance
 import org.connectbot.sshlib.crypto.KeyDerivation
+import org.connectbot.sshlib.crypto.KyberKotlinMlKemProvider
 import org.connectbot.sshlib.crypto.MacEntry
 import org.connectbot.sshlib.crypto.SshPublicKeyEncoder
 import org.connectbot.sshlib.crypto.X25519ProviderFactory
 import org.connectbot.sshlib.crypto.encodeMpint
+import org.connectbot.sshlib.crypto.encodeSshString
 import org.connectbot.sshlib.protocol.ChannelRequestExitSignal
 import org.connectbot.sshlib.protocol.ChannelRequestExitStatus
 import org.connectbot.sshlib.protocol.SshEnums
@@ -109,6 +111,10 @@ class FakeSshServer(
     var advertiseExtInfo: Boolean = false
     var kexAlgorithms: String? = null
     var corruptKexSignature: Boolean = false
+    var transformKexServerPublic: (ByteArray) -> ByteArray = { it }
+    var truncateKexReply: Boolean = false
+    private val receivedDisconnects = Channel<SshMsgDisconnect>(Channel.UNLIMITED)
+    suspend fun awaitDisconnect(): SshMsgDisconnect = receivedDisconnects.receive()
     var sendDuplicateKexInitDuringRekey: Boolean = false
     private val receivedPongs = Channel<ByteArray>(Channel.UNLIMITED)
     private val receivedExtInfo = Channel<SshMsgExtInfo>(Channel.UNLIMITED)
@@ -424,10 +430,22 @@ class FakeSshServer(
     ) {
         val x25519 = X25519ProviderFactory.provider
         val serverPrivate = x25519.generatePrivateKey()
-        val serverPublic = x25519.publicFromPrivate(serverPrivate)
+        val serverX25519Public = x25519.publicFromPrivate(serverPrivate)
 
-        val sharedSecretRaw = x25519.computeSharedSecret(serverPrivate, clientPublic)
-        val sharedSecret = encodeMpint(BigInteger(1, sharedSecretRaw).toByteArray())
+        val hybrid = kexAlgorithms?.split(',')?.first() == "mlkem768x25519-sha256"
+        val serverPublic: ByteArray
+        val sharedSecret: ByteArray
+        if (hybrid) {
+            check(clientPublic.size == 1216)
+            val encapsulation = KyberKotlinMlKemProvider().encapsulate(clientPublic.copyOfRange(0, 1184))
+            val classicalSecret = x25519.computeSharedSecret(serverPrivate, clientPublic.copyOfRange(1184, 1216))
+            serverPublic = transformKexServerPublic(encapsulation.ciphertext + serverX25519Public)
+            sharedSecret = encodeSshString(MessageDigest.getInstance("SHA-256").digest(encapsulation.sharedSecret + classicalSecret))
+        } else {
+            serverPublic = transformKexServerPublic(serverX25519Public)
+            val sharedSecretRaw = x25519.computeSharedSecret(serverPrivate, clientPublic)
+            sharedSecret = encodeMpint(BigInteger(1, sharedSecretRaw).toByteArray())
+        }
 
         val exchangeHash = computeExchangeHash(
             clientVersion = clientVersionStr.toByteArray(Charsets.US_ASCII),
@@ -458,7 +476,8 @@ class FakeSshServer(
             _check()
         }
 
-        writeMutex.withLock { io.writePacket(SshEnums.KexEcdh.SSH_MSG_KEX_ECDH_REPLY.id().toInt(), reply.toByteArray()) }
+        val payload = reply.toByteArray().let { if (truncateKexReply) it.copyOf(it.size - 1) else it }
+        writeMutex.withLock { io.writePacket(SshEnums.KexEcdh.SSH_MSG_KEX_ECDH_REPLY.id().toInt(), payload) }
     }
 
     private fun activateEncryption(io: PacketIO) {
@@ -602,9 +621,7 @@ class FakeSshServer(
 
     private suspend fun readPacketFiltering(io: PacketIO): Pair<SshEnums.MessageType, ByteArray> {
         while (true) {
-            val packet = io.readPacket()
-            val msgType = packet.messageType()
-            val rawBytes = byteArrayOf(msgType.id().toByte()) + packet._raw_body()
+            val (msgType, rawBytes) = readPacketWithType(io)
             when (msgType) {
                 SshEnums.MessageType.SSH_MSG_EXT_INFO -> {
                     val bodyBytes = rawBytes.copyOfRange(1, rawBytes.size)
@@ -626,6 +643,11 @@ class FakeSshServer(
         val packet = io.readPacket()
         val msgType = packet.messageType()
         val rawBytes = byteArrayOf(msgType.id().toByte()) + packet._raw_body()
+        if (msgType == SshEnums.MessageType.SSH_MSG_DISCONNECT) {
+            val disconnect = SshMsgDisconnect(ByteBufferKaitaiStream(packet._raw_body()))
+            disconnect._read()
+            receivedDisconnects.trySend(disconnect)
+        }
         return msgType to rawBytes
     }
 

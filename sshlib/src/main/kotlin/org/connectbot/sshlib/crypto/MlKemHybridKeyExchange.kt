@@ -1,6 +1,6 @@
 /*
  * ConnectBot SSH Library
- * Copyright 2025 Kenny Root
+ * Copyright 2025-2026 Kenny Root
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import java.security.MessageDigest
  * ML-KEM-768 hybrid key exchange (mlkem768x25519-sha256).
  *
  * Combines post-quantum ML-KEM-768 with classical X25519.
- * Implements draft-ietf-sshm-mlkem-hybrid-kex.
+ * Implements RFC 10042 sections 2.1-2.5.
  *
  * Client init message: mlkem_pubkey (1184) || x25519_pubkey (32) = 1216 bytes
  * Server reply: mlkem_ciphertext (1088) || x25519_pubkey (32) = 1120 bytes
@@ -97,10 +97,19 @@ internal class MlKemHybridKeyExchange(
 
         try {
             val mlKemSharedSecret = mlKemProvider.decapsulate(mlKemPriv, mlKemCiphertext)
+            if (mlKemSharedSecret.size != MLKEM768_SHARED_SECRET_SIZE) {
+                throw SshException("Invalid ML-KEM shared secret length: ${mlKemSharedSecret.size}")
+            }
 
             val x25519SharedSecret = x25519Provider.computeSharedSecret(x25519Priv, serverX25519PublicKey)
+            if (x25519SharedSecret.size != X25519_KEY_SIZE) {
+                throw SshException("Invalid X25519 shared secret length: ${x25519SharedSecret.size}")
+            }
             validateNotAllZeros(x25519SharedSecret)
 
+            // RFC 8731 section 3.1 reinterprets the raw X25519 output as a network-order
+            // integer. RFC 10042 section 2.4 encodes that integer as exactly 32 bytes,
+            // preserving the original byte order, leading zeros, and high bit.
             val combined = ByteArray(MLKEM768_SHARED_SECRET_SIZE + X25519_KEY_SIZE)
             System.arraycopy(mlKemSharedSecret, 0, combined, 0, MLKEM768_SHARED_SECRET_SIZE)
             System.arraycopy(x25519SharedSecret, 0, combined, MLKEM768_SHARED_SECRET_SIZE, X25519_KEY_SIZE)
@@ -114,14 +123,11 @@ internal class MlKemHybridKeyExchange(
     }
 
     private fun validateNotAllZeros(secret: ByteArray) {
-        var allZero = true
+        var nonZero = 0
         for (b in secret) {
-            if (b.toInt() != 0) {
-                allZero = false
-                break
-            }
+            nonZero = nonZero or b.toInt()
         }
-        if (allZero) {
+        if (nonZero == 0) {
             throw SshException("Invalid X25519 shared secret; all zeroes")
         }
     }
