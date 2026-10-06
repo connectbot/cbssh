@@ -57,6 +57,7 @@ RUN mkdir -p /run/openssh && \
     echo "UsePAM yes" >> /etc/ssh/sshd_config && \
     echo "AllowTcpForwarding yes" >> /etc/ssh/sshd_config && \
     echo "GatewayPorts yes" >> /etc/ssh/sshd_config && \
+    echo "AcceptEnv CBSSH_TEST_*" >> /etc/ssh/sshd_config && \
     echo "MaxAuthTries 20" >> /etc/ssh/sshd_config
 
 # Set up public key authentication for test user

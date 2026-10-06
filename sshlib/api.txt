@@ -615,6 +615,7 @@ package org.connectbot.sshlib {
     method @InaccessibleFromKotlin public boolean getAutoDisconnectOnLastChannelClose();
     method @InaccessibleFromKotlin public java.lang.String getClientVersion();
     method @InaccessibleFromKotlin public java.lang.String getEncryptionAlgorithms();
+    method @InaccessibleFromKotlin public java.util.Map<java.lang.String,java.lang.String> getEnvironment();
     method @InaccessibleFromKotlin public java.lang.String getHostKeyAlgorithms();
     method @InaccessibleFromKotlin public org.connectbot.sshlib.HostKeyVerifier getHostKeyVerifier();
     method @InaccessibleFromKotlin public java.lang.String getKexAlgorithms();
@@ -629,6 +630,7 @@ package org.connectbot.sshlib {
     property public boolean autoDisconnectOnLastChannelClose;
     property public String clientVersion;
     property public String encryptionAlgorithms;
+    property public java.util.Map<java.lang.String,java.lang.String> environment;
     property public String hostKeyAlgorithms;
     property public org.connectbot.sshlib.HostKeyVerifier hostKeyVerifier;
     property public String kexAlgorithms;
@@ -650,6 +652,7 @@ package org.connectbot.sshlib {
     method @InaccessibleFromKotlin public java.lang.String getClientVersion();
     method @InaccessibleFromKotlin public boolean getEnableCompression();
     method @InaccessibleFromKotlin public java.lang.String getEncryptionAlgorithms();
+    method @InaccessibleFromKotlin public java.util.Map<java.lang.String,java.lang.String> getEnvironment();
     method @InaccessibleFromKotlin public java.lang.String getHost();
     method @InaccessibleFromKotlin public java.lang.String getHostKeyAlgorithms();
     method @InaccessibleFromKotlin public org.connectbot.sshlib.HostKeyVerifier? getHostKeyVerifier();
@@ -668,6 +671,7 @@ package org.connectbot.sshlib {
     method @InaccessibleFromKotlin public void setClientVersion(java.lang.String);
     method @InaccessibleFromKotlin public void setEnableCompression(boolean);
     method @InaccessibleFromKotlin public void setEncryptionAlgorithms(java.lang.String);
+    method @InaccessibleFromKotlin public void setEnvironment(java.util.Map<java.lang.String,java.lang.String>);
     method @InaccessibleFromKotlin public void setHost(java.lang.String);
     method @InaccessibleFromKotlin public void setHostKeyAlgorithms(java.lang.String);
     method @InaccessibleFromKotlin public void setHostKeyVerifier(org.connectbot.sshlib.HostKeyVerifier?);
@@ -686,6 +690,7 @@ package org.connectbot.sshlib {
     property public String clientVersion;
     property public boolean enableCompression;
     property public String encryptionAlgorithms;
+    property public java.util.Map<java.lang.String,java.lang.String> environment;
     property public String host;
     property public String hostKeyAlgorithms;
     property public org.connectbot.sshlib.HostKeyVerifier? hostKeyVerifier;
@@ -728,6 +733,7 @@ package org.connectbot.sshlib {
     method @InaccessibleFromKotlin public boolean isOpen();
     method public suspend java.lang.Object? read(kotlin.coroutines.Continuation<? super byte[]?>);
     method public suspend java.lang.Object? readExtended(kotlin.coroutines.Continuation<? super kotlin.Pair<java.lang.Integer,byte[]>?>);
+    method public suspend java.lang.Object? requestEnv(java.lang.String name, java.lang.String value, kotlin.coroutines.Continuation<? super java.lang.Boolean>);
     method public suspend java.lang.Object? requestExec(java.lang.String command, kotlin.coroutines.Continuation<? super java.lang.Boolean>);
     method public suspend java.lang.Object? requestPty(optional java.lang.String terminalType, optional int widthChars, optional int heightRows, optional int widthPixels, optional int heightPixels, optional byte[] terminalModes, kotlin.coroutines.Continuation<? super java.lang.Boolean>);
     method public suspend java.lang.Object? requestShell(kotlin.coroutines.Continuation<? super java.lang.Boolean>);
@@ -817,6 +823,7 @@ package org.connectbot.sshlib.client {
     method @InaccessibleFromKotlin public boolean isOpen();
     method public suspend java.lang.Object? read(kotlin.coroutines.Continuation<? super byte[]?>);
     method public suspend java.lang.Object? readExtended(kotlin.coroutines.Continuation<? super kotlin.Pair<java.lang.Integer,byte[]>?>);
+    method public suspend java.lang.Object? requestEnv(java.lang.String name, java.lang.String value, kotlin.coroutines.Continuation<? super java.lang.Boolean>);
     method public suspend java.lang.Object? requestExec(java.lang.String command, kotlin.coroutines.Continuation<? super java.lang.Boolean>);
     method public suspend java.lang.Object? requestPty(java.lang.String terminalType, int widthChars, int heightRows, int widthPixels, int heightPixels, byte[] terminalModes, kotlin.coroutines.Continuation<? super java.lang.Boolean>);
     method public suspend java.lang.Object? requestShell(kotlin.coroutines.Continuation<? super java.lang.Boolean>);

@@ -31,6 +31,7 @@ import org.connectbot.sshlib.PingResult
 import org.connectbot.sshlib.client.DynamicPortForwarder
 import org.connectbot.sshlib.client.LocalPortForwarder
 import org.connectbot.sshlib.client.RemotePortForwarder
+import org.connectbot.sshlib.client.SessionChannel
 import org.connectbot.sshlib.client.SshConnection
 import org.connectbot.sshlib.client.sftp.SftpClientImpl
 import org.connectbot.sshlib.crypto.PrivateKeyReader
@@ -429,10 +430,23 @@ class SshClient private constructor(
 
         return try {
             logger.info("Opening session channel")
-            conn.openSessionChannel()
+            conn.openSessionChannel()?.also { configureEnvironment(it) }
         } catch (e: Exception) {
             logger.error("Failed to open session channel", e)
             null
+        }
+    }
+
+    private suspend fun configureEnvironment(session: SessionChannel) {
+        try {
+            for ((name, value) in config.environment) {
+                if (!session.sendEnv(name, value, wantReply = false)) {
+                    throw SshException("Session closed while sending environment defaults")
+                }
+            }
+        } catch (failure: Throwable) {
+            session.close()
+            throw failure
         }
     }
 
@@ -455,6 +469,7 @@ class SshClient private constructor(
             logger.info("Opening SFTP session")
             val session = conn.openBufferedSessionChannel(config.sftpWindowSize)
                 ?: return SftpResult.ProtocolError("Failed to open session channel for SFTP")
+            configureEnvironment(session)
             if (!session.requestSubsystem("sftp")) {
                 session.close()
                 return SftpResult.ProtocolError("Server rejected SFTP subsystem request")

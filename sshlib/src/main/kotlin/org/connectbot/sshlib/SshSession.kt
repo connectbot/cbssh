@@ -78,6 +78,15 @@ interface SshSession : AutoCloseable {
         heightPixels: Int,
     ): Boolean
 
+    /**
+     * Request an environment variable for this session (RFC 4254 section 6.4).
+     * Call before requesting a shell, command, or subsystem. Servers may restrict names
+     * (OpenSSH uses AcceptEnv) and reject requests after process startup.
+     * Names and values are encoded as UTF-8. Returns false for NUL-containing input,
+     * a closed channel, or server rejection; rejection does not close the session.
+     */
+    suspend fun requestEnv(name: String, value: String): Boolean
+
     suspend fun requestShell(): Boolean
 
     /**

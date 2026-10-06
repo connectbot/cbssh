@@ -357,6 +357,8 @@ class SftpPacketIOTest {
             heightPixels: Int,
         ): Boolean = true
 
+        override suspend fun requestEnv(name: String, value: String): Boolean = false
+
         override suspend fun requestShell(): Boolean = true
 
         override suspend fun requestExec(command: String): Boolean = true

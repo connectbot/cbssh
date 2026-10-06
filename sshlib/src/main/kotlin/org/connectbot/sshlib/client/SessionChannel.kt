@@ -32,6 +32,7 @@ import kotlinx.coroutines.sync.withLock
 import org.connectbot.sshlib.SessionExit
 import org.connectbot.sshlib.SshSession
 import org.connectbot.sshlib.protocol.ByteString
+import org.connectbot.sshlib.protocol.ChannelRequestEnv
 import org.connectbot.sshlib.protocol.ChannelRequestExec
 import org.connectbot.sshlib.protocol.ChannelRequestPtyReq
 import org.connectbot.sshlib.protocol.ChannelRequestShell
@@ -40,6 +41,7 @@ import org.connectbot.sshlib.protocol.ChannelRequestWindowChange
 import org.connectbot.sshlib.protocol.SshChannelEffect
 import org.connectbot.sshlib.protocol.SshChannelState
 import org.connectbot.sshlib.protocol.SshChannelStateMachine
+import org.connectbot.sshlib.protocol.createByteString
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
@@ -538,6 +540,22 @@ class SessionChannel internal constructor(
         }
         if (granted) ptyGranted = true
         return granted
+    }
+
+    override suspend fun requestEnv(name: String, value: String): Boolean = sendEnv(name, value, wantReply = true)
+
+    internal suspend fun sendEnv(name: String, value: String, wantReply: Boolean): Boolean {
+        if ('\u0000' in name || '\u0000' in value) return false
+        return performSendRequest {
+            connection.beginChannelRequest(_remoteChannelNumber, "env", wantReply) { msg ->
+                val env = ChannelRequestEnv().apply {
+                    setVariableName(createByteString(name.toByteArray(Charsets.UTF_8)))
+                    setVariableValue(createByteString(value.toByteArray(Charsets.UTF_8)))
+                    _check()
+                }
+                msg.setRequestSpecificFields(env)
+            }
+        }
     }
 
     override suspend fun requestShell(): Boolean = performSendRequest {

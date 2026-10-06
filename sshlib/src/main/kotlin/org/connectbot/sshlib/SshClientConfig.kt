@@ -25,6 +25,7 @@ import org.connectbot.sshlib.crypto.SignatureEntry
 import org.connectbot.sshlib.transport.IpVersion
 import org.connectbot.sshlib.transport.KtorTcpTransportFactory
 import org.connectbot.sshlib.transport.TransportFactory
+import java.util.Collections
 
 /**
  * Configuration for SSH client connections.
@@ -61,6 +62,7 @@ class SshClientConfig private constructor(
     val autoDisconnectOnLastChannelClose: Boolean,
     val sessionWindowSize: Int,
     val sftpWindowSize: Int,
+    val environment: Map<String, String>,
 ) {
     class Builder {
         /**
@@ -152,7 +154,18 @@ class SshClientConfig private constructor(
          */
         var sftpWindowSize: Int = 8 * 1024 * 1024
 
+        /**
+         * Environment variables sent before each session starts, including SFTP.
+         * Servers may ignore variables not allowed by their policy (OpenSSH AcceptEnv).
+         * Names and values use UTF-8 and must not contain NUL. Only supplied variables are sent.
+         */
+        var environment: Map<String, String> = emptyMap()
+
         fun build(): SshClientConfig {
+            val environmentSnapshot = LinkedHashMap(environment)
+            require(environmentSnapshot.all { (name, value) -> '\u0000' !in name && '\u0000' !in value }) {
+                "Environment names and values must not contain NUL"
+            }
             val factory = transportFactory ?: run {
                 require(host.isNotBlank()) { "Host must be specified when using default TCP transport" }
                 require(port in 1..65535) { "Port must be between 1 and 65535" }
@@ -188,6 +201,7 @@ class SshClientConfig private constructor(
                 autoDisconnectOnLastChannelClose,
                 sessionWindowSize,
                 sftpWindowSize,
+                Collections.unmodifiableMap(environmentSnapshot),
             )
         }
     }
