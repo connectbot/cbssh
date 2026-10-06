@@ -23,5 +23,5 @@ USER 1234:1234
 EXPOSE 8022
 ENV PYTHONUNBUFFERED=0
 CMD ["python", "-u", "server.py"]
-COPY *.pub /app/
+COPY --chown=1234:1234 *.pub /app/
 RUN cat /app/*.pub > /app/authorized_keys && rm -f /app/*.pub
