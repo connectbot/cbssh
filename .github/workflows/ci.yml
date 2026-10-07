@@ -29,6 +29,9 @@ jobs:
           install: true
           install_args: actionlint shellcheck
 
+      - name: Test documentation publisher
+        run: PYTHONPATH=.github/scripts python3 -m unittest discover -s .github/scripts/tests -v
+
       - name: Check workflow syntax
         run: mise exec -- actionlint
 
@@ -81,7 +84,7 @@ jobs:
           sudo systemctl restart docker
 
       - name: Build with Gradle
-        run: ./gradlew build koverXmlReport --info -PjdkVersion=${{ matrix.java }}
+        run: ./gradlew --dependency-verification strict build koverXmlReport --info -PjdkVersion=${{ matrix.java }}
 
       - name: Read project version
         id: project-version

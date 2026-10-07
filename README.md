@@ -15,6 +15,9 @@ that auto-generate code from `.ksy` definitions. The internal state machine is
 defined in KStateMachine for clear separation of protocol states from the code
 that runs in reaction to state changes.
 
+[Documentation](https://sshlib.connectbot.org) includes HTML and Markdown API
+references for `main` and tagged releases from `0.5.0` onward.
+
 ## Features
 
 - **SSH Client**: Coroutine API (`SshClient`) and blocking connection/authentication

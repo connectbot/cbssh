@@ -15,6 +15,9 @@
  */
 
 import com.vanniktech.maven.publish.DeploymentValidation
+import org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier
+import org.jetbrains.dokka.gradle.formats.DokkaFormatPlugin
+import org.jetbrains.dokka.gradle.internal.InternalDokkaGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.io.ByteArrayOutputStream
 
@@ -328,3 +331,60 @@ mavenPublishing {
         }
     }
 }
+
+// BEGIN SITE DOCUMENTATION
+@OptIn(InternalDokkaGradlePluginApi::class)
+abstract class DokkaMarkdownPlugin : DokkaFormatPlugin(formatName = "markdown") {
+    override fun DokkaFormatPlugin.DokkaFormatPluginContext.configure() {
+        project.dependencies {
+            dokkaPlugin(dokka("gfm-plugin"))
+            formatDependencies.dokkaPublicationPluginClasspathApiOnly.dependencies.addLater(
+                dokka("gfm-template-processing-plugin"),
+            )
+        }
+    }
+}
+
+apply<DokkaMarkdownPlugin>()
+
+dokka {
+    moduleVersion.set(providers.gradleProperty("docsVersion").orElse(project.version.toString()))
+    val sourceRef = providers.gradleProperty("docsSourceCommit").orElse("main").get()
+    val overview = layout.buildDirectory.file("documentation-overview.md").get().asFile
+    overview.parentFile.mkdirs()
+    val readme = rootProject.file("README.md").readText().replaceFirst(
+        "# ConnectBot SSH Client Library",
+        "# Module ConnectBot SSH Library",
+    )
+    overview.writeText(
+        Regex("\\]\\(([^)]+)\\)").replace(readme) { match ->
+            val target = match.groupValues[1]
+            if (target.contains(":") || target.startsWith("#")) {
+                match.value
+            } else {
+                "](https://github.com/connectbot/cbssh/blob/$sourceRef/$target)"
+            }
+        },
+    )
+    dokkaSourceSets.configureEach {
+        includes.setFrom(overview)
+        documentedVisibilities.set(setOf(VisibilityModifier.Public))
+        perPackageOptions.configureEach {
+            documentedVisibilities.set(setOf(VisibilityModifier.Public))
+        }
+        sourceLinks.clear()
+        sourceLink {
+            localDirectory.set(file("src/main"))
+            remoteUrl.set(uri("https://github.com/connectbot/cbssh/blob/$sourceRef/sshlib/src/main"))
+            remoteLineSuffix.set("#L")
+        }
+    }
+    pluginsConfiguration {
+        html.templatesDir.set(rootProject.file(".github/scripts/templates"))
+    }
+}
+
+tasks.named("check") {
+    dependsOn("dokkaGenerate")
+}
+// END SITE DOCUMENTATION
