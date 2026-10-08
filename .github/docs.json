@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "site": {
+    "title": "ConnectBot SSH Library",
+    "base_url": "https://sshlib.connectbot.org"
+  },
+  "repository": {
+    "slug": "connectbot/cbssh"
+  },
+  "tags": {
+    "minimum": "0.5.0"
+  },
+  "build": {
+    "project": "sshlib",
+    "gradle_overlay": true,
+    "arguments": [
+      "--dependency-verification",
+      "strict"
+    ],
+    "overlays": [
+      ".github/scripts/templates",
+      "gradle/verification-metadata.xml"
+    ]
+  },
+  "api": {
+    "sshlib": "SSH"
+  },
+  "ci": {
+    "jobs": [
+      {
+        "names": [
+          "Build and test (17)",
+          "Build and test (21)",
+          "Build and test (25)"
+        ],
+        "fallback_steps": [
+          "Build with Gradle",
+          {
+            "name": "Check TLA+ models",
+            "conclusions": [
+              "success",
+              "skipped"
+            ],
+            "optional": true
+          },
+          {
+            "name": "Verify release tag",
+            "conclusions": [
+              "success",
+              "skipped"
+            ],
+            "optional": true
+          }
+        ]
+      },
+      "Workflow scripts"
+    ]
+  }
+}
