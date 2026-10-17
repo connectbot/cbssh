@@ -1,10 +1,131 @@
 """Offline regression tests for the upstream/extraction verification gate."""
 
+import io
+import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+import zipfile
 
 import vendor_sntrup as vendor
+
+
+class ArchiveInputTest(unittest.TestCase):
+    def test_cli_rejects_unexpected_artifact_before_reading_archive(self):
+        with patch.object(vendor.sys, "argv", ["vendor_sntrup.py"]), \
+                patch.object(vendor, "MANIFEST") as manifest, \
+                patch.object(vendor, "read_archive") as download:
+            manifest.read_text.return_value = json.dumps({"artifact": "unexpected:artifact"})
+            with self.assertRaisesRegex(ValueError, "Unexpected upstream artifact"):
+                vendor.main()
+            download.assert_not_called()
+
+    def test_check_failure_reports_review_instructions_without_updating_manifest(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as jar:
+            jar.writestr(vendor.LICENSE_ENTRY, b"license")
+        with patch.object(vendor.sys, "argv", ["vendor_sntrup.py", "--check"]), \
+                patch.object(vendor, "MANIFEST") as manifest, \
+                patch.object(vendor, "SOURCE_FILES", []), \
+                patch.object(vendor, "read_archive", return_value=archive.getvalue()), \
+                patch.object(vendor, "extract", return_value={}), \
+                patch.object(vendor, "verify", return_value=["UPSTREAM CHANGED: example"]), \
+                patch.object(vendor.sys, "stderr", io.StringIO()) as stderr:
+            manifest.read_text.return_value = json.dumps({
+                "artifact": "org.bouncycastle:bcprov-jdk18on", "version": "1.86",
+            })
+            self.assertEqual(1, vendor.main())
+            self.assertIn("UPSTREAM CHANGED: example", stderr.getvalue())
+            self.assertIn("Review upstream against reviewedVersion", stderr.getvalue())
+            manifest.write_text.assert_not_called()
+
+    def test_update_writes_extracted_sources_license_and_reproducible_manifest(self):
+        originals = {
+            vendor.NTRU + "Utils.java": b"package org.bouncycastle.pqc.crypto.ntruprime;\nclass Utils {\n}\n",
+            vendor.PREFIX + "crypto/Example.java": b"package org.bouncycastle.crypto;\npublic class Example {}\n",
+            vendor.LICENSE_ENTRY: b"upstream license",
+        }
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as jar:
+            for name, data in originals.items():
+                jar.writestr(name, data)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_file = root / "upstream.json"
+            manifest_file.write_text(json.dumps({
+                "artifact": "org.bouncycastle:bcprov-jdk18on", "version": "1.86", "reviewedVersion": "1.85",
+            }))
+            output = root / "java"
+            license_file = root / "LICENSE.md"
+            destination = vendor.destination
+            with patch.object(vendor.sys, "argv", ["vendor_sntrup.py", "--update", "--archive-stdin"]), \
+                    patch.object(vendor.sys, "stdin") as stdin, \
+                    patch.object(vendor.sys, "stdout", io.StringIO()), \
+                    patch.object(vendor, "MANIFEST", manifest_file), \
+                    patch.object(vendor, "SOURCE_FILES", [name for name in originals if name != vendor.LICENSE_ENTRY]), \
+                    patch.object(vendor, "destination", side_effect=lambda name: destination(name, output, license_file)):
+                stdin.buffer.read.return_value = archive.getvalue()
+                self.assertEqual(0, vendor.main())
+            manifest = json.loads(manifest_file.read_text())
+            self.assertEqual("1.86", manifest["reviewedVersion"])
+            self.assertEqual(b"upstream license", license_file.read_bytes())
+            self.assertIn("class Example {}", (output / "Example.java").read_text())
+            self.assertNotIn("public class", (output / "Example.java").read_text())
+            self.assertEqual([], vendor.verify(manifest, originals, vendor.extract(originals), output, license_file))
+
+    def test_download_uses_manifest_version_and_fixed_maven_url(self):
+        with patch.object(vendor.urllib.request, "urlopen") as download:
+            download.return_value.__enter__.return_value.read.return_value = b"archive"
+            self.assertEqual(b"archive", vendor.read_archive("1.86"))
+        download.assert_called_once_with(
+            "https://repo.maven.apache.org/maven2/org/bouncycastle/bcprov-jdk18on/"
+            "1.86/bcprov-jdk18on-1.86-sources.jar", timeout=60)
+
+    def test_cli_selects_stdin_or_download(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as jar:
+            jar.writestr(vendor.LICENSE_ENTRY, b"license")
+        manifest = {"artifact": "org.bouncycastle:bcprov-jdk18on", "version": "1.86"}
+        for flags in ([], ["--archive-stdin"]):
+            with self.subTest(flags=flags), \
+                    patch.object(vendor.sys, "argv", ["vendor_sntrup.py", "--check", *flags]), \
+                    patch.object(vendor.sys, "stdin") as stdin, \
+                    patch.object(vendor, "MANIFEST") as manifest_file, \
+                    patch.object(vendor, "SOURCE_FILES", []), \
+                    patch.object(vendor, "read_archive", return_value=archive.getvalue()) as download, \
+                    patch.object(vendor, "extract", return_value={}) as extract, \
+                    patch.object(vendor, "verify", return_value=[]), \
+                    patch.object(vendor.sys, "stdout", io.StringIO()):
+                manifest_file.read_text.return_value = json.dumps(manifest)
+                stdin.buffer.read.return_value = archive.getvalue()
+                self.assertEqual(0, vendor.main())
+                extract.assert_called_once_with({vendor.LICENSE_ENTRY: b"license"})
+                if flags:
+                    stdin.buffer.read.assert_called_once_with()
+                    download.assert_not_called()
+                else:
+                    stdin.buffer.read.assert_not_called()
+                    download.assert_called_once_with("1.86")
+
+    def test_cli_reports_empty_or_malformed_stdin_archive(self):
+        for data in (b"", b"not a zip archive"):
+            with self.subTest(data=data):
+                result = subprocess.run(
+                    [sys.executable, vendor.__file__, "--check", "--archive-stdin"],
+                    input=data, capture_output=True, check=False)
+                self.assertEqual(1, result.returncode)
+                self.assertIn(b"SNTRUP source verification failed:", result.stderr)
+                self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_cli_rejects_removed_archive_option(self):
+        result = subprocess.run(
+            [sys.executable, vendor.__file__, "--archive", "unused.jar"],
+            capture_output=True, check=False)
+        self.assertEqual(2, result.returncode)
+        self.assertIn(b"unrecognized arguments: --archive", result.stderr)
 
 
 class VerificationTest(unittest.TestCase):
@@ -69,13 +190,80 @@ class VerificationTest(unittest.TestCase):
 
 
 class ExtractionTest(unittest.TestCase):
+    def test_adapts_crypto_dependencies_and_adds_private_key_erasure(self):
+        originals = {
+            vendor.NTRU + "Utils.java": b"class Utils {\n}\n",
+            vendor.NTRU + "SNTRUPrimePrivateKeyParameters.java": b"""package org.bouncycastle.pqc.crypto.ntruprime;
+import org.bouncycastle.util.Arrays;
+public class SNTRUPrimePrivateKeyParameters {
+    Object a = Arrays.clone(f);
+    Object b = Arrays.copyOfRange(f, 0, 1);
+    boolean c = Arrays.constantTimeAreEqual(f, ginv);
+    Object random = CryptoServicesRegistrar.getSecureRandom();
+    Object supplied = CryptoServicesRegistrar.getSecureRandom(random);
+}
+""",
+            vendor.LICENSE_ENTRY: b"license",
+        }
+        result = vendor.extract(originals)
+        source = result[vendor.NTRU + "SNTRUPrimePrivateKeyParameters.java"].decode()
+        self.assertIn("f.clone()", source)
+        self.assertIn("java.util.Arrays.copyOfRange(f, 0, 1)", source)
+        self.assertIn("java.security.MessageDigest.isEqual(f, ginv)", source)
+        self.assertIn("new SecureRandom()", source)
+        self.assertIn("(random != null ? random : new SecureRandom())", source)
+        for field in ("f", "ginv", "pk", "rho", "hash"):
+            self.assertIn(f"java.util.Arrays.fill({field}, (byte)0);", source)
+        self.assertNotIn("org.bouncycastle", source)
+        self.assertEqual(b"license", result[vendor.LICENSE_ENTRY])
+
+    def test_unadapted_upstream_dependency_fails_extraction(self):
+        with self.assertRaisesRegex(ValueError, "Unadapted BC dependency"):
+            vendor.extract({
+                vendor.NTRU + "Utils.java": b"class Utils {\n}\n",
+                vendor.NTRU + "Caller.java": b"class Caller { Object value = CryptoServicesRegistrar.newMethod(); }",
+                vendor.LICENSE_ENTRY: b"license",
+            })
+
+    def test_overloaded_upstream_helper_fails_extraction(self):
+        with self.assertRaisesRegex(ValueError, "Upstream Utils now overloads helper"):
+            vendor.client_utils({vendor.NTRU + "Utils.java": """class Utils {
+    static int helper()
+    {
+        return 1;
+    }
+    static int helper(int value)
+    {
+        return value;
+    }
+}
+"""})
+
+    def test_small_polynomial_adaptation_requires_each_upstream_shift_once(self):
+        shifts = [f"        x += (byte)(sp[spIndex++] + 1) << {shift};" for shift in (2, 4, 6)]
+        for body in ("\n".join(shifts), "\n".join(shifts[:-1]), "\n".join(shifts + shifts[:1])):
+            sources = {
+                vendor.NTRU + "Caller.java": "class Caller { void call() { Utils.getEncodedSmallPolynomial(); } }",
+                vendor.NTRU + "Utils.java": (
+                    "class Utils {\n    protected static void getEncodedSmallPolynomial()\n    {\n"
+                    + body + "\n    }\n}\n"),
+            }
+            with self.subTest(body=body):
+                if body == "\n".join(shifts):
+                    result = vendor.client_utils(sources)
+                    for shift in (2, 4, 6):
+                        self.assertIn(f"x = (byte)(x + (((sp[spIndex++] + 1) & 0xff) << {shift}));", result)
+                else:
+                    with self.assertRaisesRegex(ValueError, "Upstream small-polynomial encoding changed"):
+                        vendor.client_utils(sources)
+
     def test_transitive_math_helpers_are_retained_and_unrelated_aes_is_removed(self):
         sources = {
             vendor.NTRU + "Caller.java": "class Caller { int x() { return Utils.outer(); } }",
             vendor.NTRU + "Utils.java": """class Utils {
     protected static int outer()
     {
-        return inner();
+        return inner() + inner();
     }
     private static int inner()
     {

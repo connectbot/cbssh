@@ -15,6 +15,7 @@
  */
 
 import net.researchgate.release.ReleaseExtension
+import org.gradle.api.tasks.SourceSetContainer
 import org.gradle.api.tasks.testing.Test
 
 plugins {
@@ -52,6 +53,50 @@ tasks.register("stageMavenPublication") {
     dependsOn(":protocol:stageMavenPublication", ":sshlib:stageMavenPublication")
 }
 
+// Only data crosses into the isolated SonarCloud workflow. Never ship Gradle caches
+// or scanner configuration alongside these reports and compiled classes.
+val stageSonarInputs = tasks.register<Sync>("stageSonarInputs") {
+    group = "verification"
+    description = "Stages bytecode, dependency JARs, and coverage for isolated SonarCloud analysis"
+    into(layout.buildDirectory.dir("sonar-inputs"))
+    from(layout.buildDirectory.file("reports/kover/report.xml")) {
+        into("reports/kover")
+    }
+    from(layout.buildDirectory.file("reports/python/coverage.xml")) {
+        into("reports/python")
+    }
+    doFirst {
+        check(layout.buildDirectory.file("reports/kover/report.xml").get().asFile.isFile)
+        check(layout.buildDirectory.file("reports/python/coverage.xml").get().asFile.isFile)
+    }
+}
+
+subprojects {
+    val module = name
+    pluginManager.withPlugin("java") {
+        val sourceSets = extensions.getByType<SourceSetContainer>()
+        val stageModule = tasks.register<Sync>("stageSonarModuleInputs") {
+            group = "verification"
+            description = "Stages module bytecode and dependency JARs for isolated SonarCloud analysis"
+            into(layout.buildDirectory.dir("sonar-inputs"))
+            for (sourceSetName in listOf("main", "test")) {
+                val sources = sourceSets.named(sourceSetName)
+                dependsOn(sources.map { it.classesTaskName })
+                from(sources.map { it.output.classesDirs }) {
+                    include("**/*.class")
+                    into("classes/$module/$sourceSetName")
+                }
+                from(sources.map { it.compileClasspath.filter { file -> file.extension == "jar" } }) {
+                    into("libraries/$module/$sourceSetName")
+                }
+            }
+        }
+        stageSonarInputs.configure {
+            from(stageModule)
+        }
+    }
+}
+
 configure<ReleaseExtension> {
     tagTemplate.set("v\${version}")
     preTagCommitMessage.set("chore(release): ")
@@ -75,6 +120,7 @@ sonar {
         property("sonar.organization", "connectbot")
         property("sonar.host.url", "https://sonarcloud.io")
         property("sonar.coverage.jacoco.xmlReportPaths", "build/reports/kover/report.xml")
+        property("sonar.python.coverage.reportPaths", "build/reports/python/coverage.xml")
         property("sonar.coverage.exclusions", "testapp/**")
         property("sonar.exclusions", "**/build/generated/**")
         property("sonar.issue.ignore.multicriteria", "cognitiveComplexityConnection,cognitiveComplexitySftp,cognitiveComplexityTransport")
