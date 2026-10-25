@@ -1451,10 +1451,15 @@ class SshConnection(
     }
 
     private suspend fun sendKexDhGexRequest(kexEntry: KexEntry) {
-        logger.debug("Sending DH_GEX_REQUEST (${kexEntry.sshName})")
-
         val dhGex = DiffieHellmanGroupExchange(kexEntry.hashAlgorithm, cryptoPolicy?.minimumDhBits ?: 2048)
         kex = dhGex
+        logger.info(
+            "Sending DH_GEX_REQUEST ({}): {}/{}/{} bits",
+            kexEntry.sshName,
+            dhGex.min,
+            dhGex.n,
+            dhGex.max,
+        )
 
         val msg = SshMsgKexDhGexRequest().apply {
             setMin(dhGex.min.toLong())
@@ -1495,17 +1500,22 @@ class SshConnection(
         val group = dhGexGroup ?: throw SshException("DH-GEX group not received")
         val dhGex = kex as? DiffieHellmanGroupExchange
             ?: throw SshException("KEX algorithm is not DH-GEX")
-        logger.debug("DH-GEX group received; validating group")
-        val validationStartedAt = System.nanoTime()
-        dhGex.setGroup(
-            BigInteger(1, group.p().body()),
-            BigInteger(1, group.g().body()),
+        val p = BigInteger(1, group.p().body())
+        val g = BigInteger(1, group.g().body())
+        val q = p.subtract(BigInteger.ONE).shiftRight(1)
+        logger.info(
+            "DH-GEX group received: p={} bits, q={} set/{} bits, g={} bits; validating group",
+            p.bitLength(),
+            q.bitCount(),
+            q.bitLength(),
+            g.bitLength(),
         )
-        logger.debug("DH-GEX group validated in {} ms", (System.nanoTime() - validationStartedAt) / 1_000_000)
-        logger.debug("Generating DH-GEX client key")
+        val validationStartedAt = System.nanoTime()
+        dhGex.setGroup(p, g)
+        logger.info("DH-GEX group validated in {} ms; generating client key", (System.nanoTime() - validationStartedAt) / 1_000_000)
         val keyGenerationStartedAt = System.nanoTime()
         clientPublicKey = dhGex.generateClientKeys()
-        logger.debug("DH-GEX client key generated in {} ms", (System.nanoTime() - keyGenerationStartedAt) / 1_000_000)
+        logger.info("DH-GEX client key generated in {} ms; sending DH_GEX_INIT", (System.nanoTime() - keyGenerationStartedAt) / 1_000_000)
 
         val initMsg = SshMsgKexDhGexInit().apply {
             setE(createMpint(clientPublicKey!!))
