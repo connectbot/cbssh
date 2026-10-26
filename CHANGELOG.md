@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.6.5][0.6.5]
 
-Changes for library users since `0.6.3`.
+Changes for library users since `0.6.4`.
 
 ### Fixed
 
@@ -10,6 +10,16 @@ Changes for library users since `0.6.3`.
   `NoSuchMethodError` on Android 12 and older: EC points are decoded without
   `BigInteger(int, byte[], int, int)`, which Android has only since API 33.
   The failure killed the app when the server sent its host keys after login.
+
+## [0.6.4][0.6.4]
+
+Changes for library users since `0.6.3`.
+
+### Changed
+
+- Expanded Diffie-Hellman group-exchange diagnostics with requested and received
+  group sizes, and promoted group-validation and client-key-generation timing
+  logs to INFO to help diagnose slow handshakes.
 
 ## [0.6.3][0.6.3]
 
@@ -277,6 +287,8 @@ Changes for library users since `0.2.1`.
 - Limited zlib decompression output per packet to reduce decompression-bomb
   denial-of-service risk.
 
+[0.6.5]: https://github.com/connectbot/cbssh/compare/v0.6.4...v0.6.5
+[0.6.4]: https://github.com/connectbot/cbssh/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/connectbot/cbssh/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/connectbot/cbssh/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/connectbot/cbssh/compare/v0.6.0...v0.6.1
