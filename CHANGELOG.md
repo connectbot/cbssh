@@ -4,6 +4,13 @@
 
 Changes for library users since `0.6.3`.
 
+### Fixed
+
+- ECDSA host keys and NIST ECDH key exchange no longer fail with
+  `NoSuchMethodError` on Android 12 and older: EC points are decoded without
+  `BigInteger(int, byte[], int, int)`, which Android has only since API 33.
+  The failure killed the app when the server sent its host keys after login.
+
 ## [0.6.3][0.6.3]
 
 Changes for library users since `0.6.2`.

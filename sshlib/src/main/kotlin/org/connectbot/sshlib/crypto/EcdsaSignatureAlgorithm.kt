@@ -69,8 +69,9 @@ internal object EcdsaSignatureAlgorithm : SshSignatureAlgorithm {
         if (encoded[0] != 0x04.toByte() || encoded.size != 1 + 2 * fieldSize) {
             throw SshException("Invalid EC point encoding")
         }
-        val x = BigInteger(1, encoded, 1, fieldSize)
-        val y = BigInteger(1, encoded, 1 + fieldSize, fieldSize)
+        // BigInteger(int, byte[], int, int) is missing before Android 13 (API 33).
+        val x = BigInteger(1, encoded.copyOfRange(1, 1 + fieldSize))
+        val y = BigInteger(1, encoded.copyOfRange(1 + fieldSize, encoded.size))
         return ECPoint(x, y)
     }
 
