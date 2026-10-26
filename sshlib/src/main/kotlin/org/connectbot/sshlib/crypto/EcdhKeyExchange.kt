@@ -154,8 +154,9 @@ internal class EcdhKeyExchange(private val curveName: String) : KexAlgorithm {
         if (encoded.isEmpty() || encoded[0] != 0x04.toByte() || encoded.size != 1 + 2 * fieldSize) {
             throw SshException("Invalid EC point encoding")
         }
-        val x = BigInteger(1, encoded, 1, fieldSize)
-        val y = BigInteger(1, encoded, 1 + fieldSize, fieldSize)
+        // BigInteger(int, byte[], int, int) is missing before Android 13 (API 33).
+        val x = BigInteger(1, encoded.copyOfRange(1, 1 + fieldSize))
+        val y = BigInteger(1, encoded.copyOfRange(1 + fieldSize, encoded.size))
         val p = (ecParameterSpec.curve.field as ECFieldFp).p
         if (x >= p || y >= p ||
             y.multiply(y).mod(p) != x.multiply(x).multiply(x).add(ecParameterSpec.curve.a.multiply(x)).add(ecParameterSpec.curve.b).mod(p)
