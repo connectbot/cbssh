@@ -33,20 +33,6 @@ internal class DiffieHellmanGroupExchange(override val hashAlgorithm: String, va
     companion object {
         private val secureRandom = SecureRandom()
         private const val ERROR_GROUP_NOT_SET = "DH group not set; call setGroup() first"
-        private const val PRIMALITY_CERTAINTY = 80
-        private const val GROUP_CACHE_LIMIT = 16
-        private val groupValidationCache = object : LinkedHashMap<BigInteger, Boolean>(GROUP_CACHE_LIMIT, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<BigInteger, Boolean>?): Boolean = size > GROUP_CACHE_LIMIT
-        }
-
-        @Synchronized
-        private fun isSafeGroup(p: BigInteger): Boolean = groupValidationCache.getOrPut(p) {
-            p.isProbablePrime(PRIMALITY_CERTAINTY) &&
-                p.subtract(BigInteger.ONE).shiftRight(1).isProbablePrime(PRIMALITY_CERTAINTY)
-        }
-
-        @Synchronized
-        internal fun cachedGroupValidationCount(): Int = groupValidationCache.size
     }
 
     val n = maxOf(4096, min)
@@ -72,9 +58,10 @@ internal class DiffieHellmanGroupExchange(override val hashAlgorithm: String, va
         if (g <= BigInteger.ONE || g >= p - BigInteger.ONE) {
             throw SshException("DH group generator g is out of range: must be 1 < g < p-1")
         }
-        if (!isSafeGroup(p)) {
-            throw SshException("DH group modulus is not a safe prime")
-        }
+        // Just use client-side structural checks; the server supplies a safe prime.
+        // Re-testing p and (p-1)/2 took 55 seconds for a 4095-bit group on Android:
+        // https://github.com/connectbot/connectbot/issues/2550
+        // The host-key signature authenticates these parameters as part of the exchange hash.
         this.p = p
         this.g = g
     }
