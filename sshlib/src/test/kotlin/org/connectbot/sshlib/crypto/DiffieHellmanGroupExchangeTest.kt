@@ -74,8 +74,8 @@ class DiffieHellmanGroupExchangeTest {
     @Test
     fun `setGroup rejects g greater than or equal to p minus 1`() {
         val gex = DiffieHellmanGroupExchange("SHA-256")
-        assertFailsWith<SshException> {
-            gex.setGroup(DhGroups.GROUP14_P, DhGroups.GROUP14_P - BigInteger.ONE)
+        for (g in listOf(DhGroups.GROUP14_P - BigInteger.ONE, DhGroups.GROUP14_P, DhGroups.GROUP14_P + BigInteger.ONE)) {
+            assertFailsWith<SshException> { gex.setGroup(DhGroups.GROUP14_P, g) }
         }
     }
 
@@ -89,13 +89,13 @@ class DiffieHellmanGroupExchangeTest {
     }
 
     @Test
-    fun `setGroup rejects odd composite modulus`() {
+    fun `setGroup leaves primality validation to the server`() {
         val composite = BigInteger.ONE.shiftLeft(2047).add(BigInteger.ONE).multiply(BigInteger.valueOf(3))
         val gex = DiffieHellmanGroupExchange("SHA-256")
 
-        assertFailsWith<SshException> {
-            gex.setGroup(composite, DhGroups.GENERATOR)
-        }
+        // OpenSSH-style checks accept in-range odd parameters without testing primality.
+        gex.setGroup(composite, DhGroups.GENERATOR)
+        assertTrue(gex.generateClientKeys().isNotEmpty())
     }
 
     @Test
@@ -168,16 +168,20 @@ class DiffieHellmanGroupExchangeTest {
     }
 
     @Test
-    fun `validated group cache remains bounded`() {
+    fun `setGroup rejects negative generator`() {
         val gex = DiffieHellmanGroupExchange("SHA-256")
-        repeat(20) { index ->
-            val composite = BigInteger.ONE.shiftLeft(2047)
-                .add(BigInteger.valueOf((index * 2L) + 1L))
-                .multiply(BigInteger.valueOf(3))
-            assertFailsWith<SshException> { gex.setGroup(composite, DhGroups.GENERATOR) }
-        }
+        assertFailsWith<SshException> { gex.setGroup(DhGroups.GROUP14_P, BigInteger.ONE.negate()) }
+    }
 
-        assertTrue(DiffieHellmanGroupExchange.cachedGroupValidationCount() <= 16)
+    @Test
+    fun `shared secret rejects out of range server public values`() {
+        val p = DhGroups.GROUP14_P
+        for (f in listOf(BigInteger.ZERO, BigInteger.ONE, p - BigInteger.ONE, p, p + BigInteger.ONE)) {
+            val gex = DiffieHellmanGroupExchange("SHA-256")
+            gex.setGroup(p, DhGroups.GENERATOR)
+            gex.generateClientKeys()
+            assertFailsWith<SshException> { gex.computeSharedSecret(f.toByteArray()) }
+        }
     }
 
     @Test
