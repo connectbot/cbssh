@@ -110,7 +110,9 @@ class SkAuthIntegrationTest {
 
             val edAuthLine = authorizedKeysLine(SkAlgorithm.ED25519, ed25519PublicKeyRaw(ed25519KeyPair.public), "ed25519-sk-test")
             val ecAuthLine = authorizedKeysLine(SkAlgorithm.ECDSA_P256, ecdsaP256PublicKeyPoint(ecdsaP256KeyPair.public), "ecdsa-p256-sk-test")
-            val combined = edAuthLine + "\n" + ecAuthLine + "\n"
+            val webBlob = org.connectbot.sshlib.sk.SkPublicKeyEncoder.encode(SkAlgorithm.ECDSA_P256, ecdsaP256PublicKeyPoint(ecdsaP256KeyPair.public), "example.com")
+            val webLine = "sk-ecdsa-sha2-nistp256@openssh.com ${Base64.getEncoder().encodeToString(webBlob)} webauthn"
+            val combined = edAuthLine + "\n" + ecAuthLine + "\n" + webLine + "\n"
             val cmd = "echo '$combined' >> /home/$USERNAME/.ssh/authorized_keys && chown $USERNAME:$USERNAME /home/$USERNAME/.ssh/authorized_keys"
             val result = opensshContainer.execInContainer("sh", "-c", cmd)
             check(result.exitCode == 0) {
@@ -202,6 +204,32 @@ class SkAuthIntegrationTest {
         )
         val result = connectAndAuthenticate(handler)
         assertTrue(result is AuthResult.Success, "SK ECDSA-P256 auth should succeed, got: $result")
+    }
+
+    @Test
+    fun `authenticates WebAuthn assertions with Android and HTTPS origins`() = runBlocking {
+        setUpContainerForSk()
+        for (invalid in listOf(false, true)) {
+            for (origin in listOf("android:apk-key-hash:test", "https://example.com")) {
+                val handler = object : AuthHandler {
+                    override suspend fun onPublicKeysNeeded() = listOf(
+                        SkAuthHelpers.buildAuthPublicKey(SkAlgorithm.ECDSA_P256, ecdsaP256PublicKeyPoint(ecdsaP256KeyPair.public), "example.com"),
+                    )
+                    override suspend fun onSignatureRequest(key: AuthPublicKey, dataToSign: ByteArray): ByteArray {
+                        val challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(if (invalid) byteArrayOf(9) else dataToSign)
+                        val json = "{\"type\":\"webauthn.get\",\"challenge\":\"$challenge\",\"origin\":\"$origin\"}".toByteArray()
+                        val auth = MessageDigest.getInstance("SHA-256").digest("example.com".toByteArray()) + byteArrayOf(0x1d, 0, 0, 0, 0)
+                        val signer = Signature.getInstance("SHA256withECDSA")
+                        signer.initSign(ecdsaP256KeyPair.private)
+                        signer.update(auth + MessageDigest.getInstance("SHA-256").digest(json))
+                        return SkSignatureBlob.packWebAuthn(signer.sign(), auth, json, origin)
+                    }
+                    override suspend fun onPasswordNeeded(): String? = null
+                    override suspend fun onKeyboardInteractivePrompt(name: String, instruction: String, prompts: List<KeyboardInteractiveCallback.Prompt>): List<String>? = null
+                }
+                assertTrue((connectAndAuthenticate(handler) is AuthResult.Success) != invalid)
+            }
+        }
     }
 
     private suspend fun connectAndAuthenticate(handler: AuthHandler): AuthResult {

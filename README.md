@@ -342,3 +342,9 @@ Apache License 2.0 - See LICENSE file
 ## Copyright
 
 Copyright 2019-2026, [Kenny Root](https://github.com/kruton/)
+
+### Optional WebAuthn adapter
+
+Use `org.connectbot.sshlib:sshlib-webauthn` at the same version as `sshlib` for
+Android Credential Manager request/response JSON handling. The core library
+does not depend on JSON. See [WebAuthn integration](docs/SK_AUTH.md#webauthn--android-credential-manager).

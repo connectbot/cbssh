@@ -67,3 +67,38 @@ The following are **not** handled by this library:
 - CTAP2 transport (USB-HID, NFC, BLE).
 - Credential creation (`ssh-keygen -t *-sk` equivalent).
 - Parsing `ssh-keygen`'s OpenSSH-format SK private-key files. (The library decodes the SK *public-key blob*; the surrounding OpenSSH private-key envelope is the caller's responsibility.)
+
+## WebAuthn / Android Credential Manager
+
+Add the optional `org.connectbot.sshlib:sshlib-webauthn` artifact (same version as
+`sshlib`) for JSON request/response handling. Core `sshlib` has no JSON dependency.
+
+Register an ES256/P-256 passkey in your application and retain its credential ID
+and uncompressed P-256 public point. Associate your Android application with the
+RP domain using Digital Asset Links. Build the SSH public key with
+`SkAuthHelpers.buildAuthPublicKey(SkAlgorithm.ECDSA_P256, point, rpId)` and install
+its public blob in the server's `authorized_keys` under the existing
+`sk-ecdsa-sha2-nistp256@openssh.com` key type.
+
+Inside `onSignatureRequest`:
+
+```kotlin
+val optionsJson = WebAuthnAuth.createRequestJson(rpId, credentialId, dataToSign)
+// Pass optionsJson to Android's GetPublicKeyCredentialOption, invoke Credential
+// Manager, then obtain PublicKeyCredential.authenticationResponseJson.
+return WebAuthnAuth.signatureFromResponseJson(responseJson, rpId, dataToSign)
+```
+
+Requests require user verification. The challenge is the original SSH signing
+bytes encoded with unpadded base64url, **not their SHA-256 hash**. The adapter
+checks the challenge and RP hash before packing the assertion; the server checks
+its cryptographic signature and presence/verification policy.
+
+OpenSSH expects client data to begin with compact `type`, `challenge`, `origin`
+fields in that order. The adapter preserves signed JSON bytes and rejects
+incompatible provider encodings; rewriting JSON after signing invalidates the
+signature. Registration, Android APIs and provider selection remain app-owned.
+Actual provider interoperability must be tested in the consuming application.
+
+Applications that already decode assertions can instead use the dependency-free
+`SkSignatureBlob.packWebAuthn(signature, authenticatorData, clientDataJson, origin)`.

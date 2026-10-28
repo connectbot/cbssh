@@ -1110,6 +1110,7 @@ package org.connectbot.sshlib.sk {
 
   public final class SkSignatureBlob {
     method @KotlinOnly public byte[] pack(org.connectbot.sshlib.sk.SkAlgorithm algorithm, byte[] rawSignature, byte flags, kotlin.UInt counter);
+    method public byte[] packWebAuthn(byte[] signature, byte[] authenticatorData, byte[] clientDataJson, String origin);
     property public static byte FLAG_USER_PRESENCE;
     property public static byte FLAG_USER_VERIFICATION;
     field public static final byte FLAG_USER_PRESENCE = 1; // 0x1

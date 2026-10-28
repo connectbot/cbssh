@@ -150,7 +150,7 @@ jobs:
     uses: connectbot/actions/.github/workflows/publish-maven.yml@9b826116f0d49329fbe10985a5abdfa49562f0a0 # v0.2.0
     with:
       maven_group: org.connectbot.sshlib
-      modules: protocol,sshlib
+      modules: protocol,sshlib,sshlib-webauthn
     secrets:
       MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
       MAVEN_GPG_KEYID: ${{ secrets.MAVEN_GPG_KEYID }}

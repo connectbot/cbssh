@@ -4,6 +4,11 @@
 
 Changes for library users since `0.6.5`.
 
+## Added
+
+- Add OpenSSH WebAuthn signature packing and optional `sshlib-webauthn`
+  request/response adapter.
+
 ## [0.6.5][0.6.5]
 
 Changes for library users since `0.6.4`.

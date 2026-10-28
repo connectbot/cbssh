@@ -1,4 +1,5 @@
 [versions]
+serialization = "1.9.0"
 kotlin = "2.4.21"
 clikt = "5.1.0"
 spotless = "8.10.4"
@@ -28,6 +29,7 @@ cyclonedx = "3.5.1"
 sonarqube = "7.5.0.8588"
 
 [libraries]
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 kaitai-runtime = { module = "io.kaitai:kaitai-struct-runtime", version.ref = "kaitai" }
 kaitai-compiler = { module = "io.kaitai:kaitai-struct-compiler_2.13", version.ref = "kaitai" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }

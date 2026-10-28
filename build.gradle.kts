@@ -43,6 +43,7 @@ allprojects {
 }
 
 dependencies {
+    kover(project(":sshlib-webauthn"))
     kover(project(":protocol"))
     kover(project(":sshlib"))
 }
@@ -50,7 +51,7 @@ dependencies {
 tasks.register("stageMavenPublication") {
     group = "publishing"
     description = "Stages both Maven modules for isolated attestation and publication"
-    dependsOn(":protocol:stageMavenPublication", ":sshlib:stageMavenPublication")
+    dependsOn(":protocol:stageMavenPublication", ":sshlib:stageMavenPublication", ":sshlib-webauthn:stageMavenPublication")
 }
 
 // Only data crosses into the isolated SonarCloud workflow. Never ship Gradle caches
