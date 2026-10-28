@@ -21,5 +21,6 @@ rootProject.name = "cbssh"
 include(":sshlib")
 include(":testapp")
 include(":protocol")
+include(":sshlib-webauthn")
 
 enableFeaturePreview("STABLE_CONFIGURATION_CACHE")

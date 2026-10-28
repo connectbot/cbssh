@@ -1,0 +1,11 @@
+// Signature format: 4.0
+package org.connectbot.sshlib.webauthn {
+
+  public final class WebAuthnAuth {
+    method public String createRequestJson(String rpId, byte[] credentialId, byte[] dataToSign);
+    method public byte[] signatureFromResponseJson(String responseJson, String rpId, byte[] dataToSign);
+    field public static final org.connectbot.sshlib.webauthn.WebAuthnAuth INSTANCE;
+  }
+
+}
+

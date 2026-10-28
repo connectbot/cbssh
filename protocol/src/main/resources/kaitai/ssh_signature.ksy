@@ -12,6 +12,7 @@ meta:
   - ssh_rsa_signature_blob
   - sk_ed25519_signature_blob
   - sk_ecdsa_p256_signature_blob
+  - webauthn_sk_signature_blob
 doc-ref: RFC 4253 section 6.6
 doc: >
   Generic SSH signature structure. The signature blob format is defined
@@ -45,4 +46,5 @@ seq:
       '"ssh-mldsa-87"': ssh_mldsa_signature_blob(4627)
       '"ssh-mldsa44-ed25519"': ssh_mldsa_signature_blob(2484)
       '"ssh-mldsa87-p384"': ssh_mldsa_p384_signature_blob
+      '"webauthn-sk-ecdsa-sha2-nistp256@openssh.com"': webauthn_sk_signature_blob
       _: byte_string

@@ -17,16 +17,25 @@
 
 package org.connectbot.sshlib.sk
 
+import io.kaitai.struct.ByteBufferKaitaiStream
+import io.kaitai.struct.KaitaiStream.ValidationFailedError
+import org.connectbot.sshlib.AuthHandler
 import org.connectbot.sshlib.SshException
 import org.connectbot.sshlib.crypto.DerReader
 import org.connectbot.sshlib.crypto.encodeMpint
 import org.connectbot.sshlib.crypto.encodeSshString
+import org.connectbot.sshlib.protocol.EcdsaSignatureBlob
+import org.connectbot.sshlib.protocol.WebauthnAuthenticatorData
+import org.connectbot.sshlib.protocol.WebauthnSkSignatureBlob
+import org.connectbot.sshlib.protocol.createByteString
+import org.connectbot.sshlib.protocol.toByteArray
+import java.nio.BufferUnderflowException
 
 /**
  * Packs an SK assertion into the OpenSSH SK signature wire format.
  *
  * The output is what callers should return from
- * [org.connectbot.sshlib.AuthHandler.onSignatureRequest] for an SK
+ * [AuthHandler.onSignatureRequest] for an SK
  * public key. The library writes it verbatim into the SSH publickey
  * `USERAUTH_REQUEST` packet's signature field.
  *
@@ -60,7 +69,7 @@ public object SkSignatureBlob {
     public const val FLAG_USER_PRESENCE: Byte = 0x01
     public const val FLAG_USER_VERIFICATION: Byte = 0x04
 
-    private const val ED25519_RAW_SIGNATURE_SIZE: Int = 64
+    internal const val ED25519_RAW_SIGNATURE_SIZE: Int = 64
 
     /**
      * Pack an SK assertion into the OpenSSH SK signature blob.
@@ -91,6 +100,39 @@ public object SkSignatureBlob {
             encodeUint32BigEndian(counter)
     }
 
+    /**
+     * Packs an ES256 WebAuthn assertion for OpenSSH. Signed client JSON and extension
+     * bytes are preserved verbatim. The caller supplies the origin from clientDataJSON.
+     * Use the original SSH signing bytes as the WebAuthn challenge, without hashing.
+     * @throws SshException for malformed authenticator data, origin or DER signature.
+     */
+    public fun packWebAuthn(
+        signature: ByteArray,
+        authenticatorData: ByteArray,
+        clientDataJson: ByteArray,
+        origin: String,
+    ): ByteArray {
+        val auth = try {
+            WebauthnAuthenticatorData(ByteBufferKaitaiStream(authenticatorData)).apply { _read() }
+        } catch (e: BufferUnderflowException) {
+            throw SshException("Truncated WebAuthn authenticator data", e)
+        } catch (e: ValidationFailedError) {
+            throw SshException("Invalid WebAuthn authenticator data", e)
+        }
+        if (origin.isEmpty() || origin.any { it == '\u0000' || it == '"' }) throw SshException("Invalid WebAuthn origin")
+        val material = EcdsaSignatureBlob(ByteBufferKaitaiStream(encodeSshString(packEcdsaP256MaterialFromDer(signature)))).apply { _read() }
+        val blob = WebauthnSkSignatureBlob().apply {
+            setSignature(material)
+            setFlags(auth.flags())
+            setCounter(auth.counter())
+            setOrigin(createByteString(origin.toByteArray(Charsets.UTF_8)))
+            setClientData(createByteString(clientDataJson))
+            setExtensions(createByteString(auth.extensions()))
+            _check()
+        }
+        return encodeSshString("webauthn-sk-ecdsa-sha2-nistp256@openssh.com".toByteArray(Charsets.US_ASCII)) + blob.toByteArray()
+    }
+
     private fun packEd25519Material(rawSignature: ByteArray): ByteArray {
         if (rawSignature.size != ED25519_RAW_SIGNATURE_SIZE) {
             throw SshException(
@@ -116,7 +158,7 @@ public object SkSignatureBlob {
             parsed
         } catch (e: SshException) {
             throw SshException("Malformed ECDSA DER signature: ${e.message}", e)
-        } catch (e: java.nio.BufferUnderflowException) {
+        } catch (e: BufferUnderflowException) {
             throw SshException("Malformed ECDSA DER signature: truncated", e)
         } catch (e: IndexOutOfBoundsException) {
             throw SshException("Malformed ECDSA DER signature: truncated", e)
