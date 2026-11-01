@@ -85,6 +85,7 @@ $dokka.location:org.connectbot.sshlib.sk/SkSignatureBlob///PointingToDeclaration
 $dokka.location:org.connectbot.sshlib.sk/SkSignatureBlob/FLAG_USER_PRESENCE/#/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib.sk/-sk-signature-blob/-f-l-a-g_-u-s-e-r_-p-r-e-s-e-n-c-e.html
 $dokka.location:org.connectbot.sshlib.sk/SkSignatureBlob/FLAG_USER_VERIFICATION/#/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib.sk/-sk-signature-blob/-f-l-a-g_-u-s-e-r_-v-e-r-i-f-i-c-a-t-i-o-n.html
 $dokka.location:org.connectbot.sshlib.sk/SkSignatureBlob/pack/#org.connectbot.sshlib.sk.SkAlgorithm#kotlin.ByteArray#kotlin.Byte#kotlin.UInt/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib.sk/-sk-signature-blob/pack.html
+$dokka.location:org.connectbot.sshlib.sk/SkSignatureBlob/packWebAuthn/#kotlin.ByteArray#kotlin.ByteArray#kotlin.ByteArray#kotlin.String/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib.sk/-sk-signature-blob/pack-web-authn.html
 $dokka.location:org.connectbot.sshlib.transport////PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib.transport/index.html
 $dokka.location:org.connectbot.sshlib.transport/AddressResolver///PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib.transport/-address-resolver/index.html
 $dokka.location:org.connectbot.sshlib.transport/AddressResolver/resolve/#kotlin.String/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib.transport/-address-resolver/resolve.html

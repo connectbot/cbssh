@@ -7,7 +7,7 @@ object [SkSignatureBlob](index.md)
 
 Packs an SK assertion into the OpenSSH SK signature wire format.
 
-The output is what callers should return from [org.connectbot.sshlib.AuthHandler.onSignatureRequest](../../org.connectbot.sshlib/-auth-handler/on-signature-request.md) for an SK public key. The library writes it verbatim into the SSH publickey `USERAUTH_REQUEST` packet's signature field.
+The output is what callers should return from [AuthHandler.onSignatureRequest](../../org.connectbot.sshlib/-auth-handler/on-signature-request.md) for an SK public key. The library writes it verbatim into the SSH publickey `USERAUTH_REQUEST` packet's signature field.
 
 Format per OpenSSH `PROTOCOL.u2f` §3.2:
 
@@ -41,3 +41,4 @@ The `flags` and `counter` parameters of [pack](pack.md) come from the CTAP2 GetA
 | Name | Summary |
 |---|---|
 | [pack](pack.md) | [jvm]<br>fun [pack](pack.md)(algorithm: [SkAlgorithm](../-sk-algorithm/index.md), rawSignature: [ByteArray](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-byte-array/index.html), flags: [Byte](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-byte/index.html), counter: [UInt](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-u-int/index.html)): [ByteArray](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-byte-array/index.html)<br>Pack an SK assertion into the OpenSSH SK signature blob. |
+| [packWebAuthn](pack-web-authn.md) | [jvm]<br>fun [packWebAuthn](pack-web-authn.md)(signature: [ByteArray](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-byte-array/index.html), authenticatorData: [ByteArray](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-byte-array/index.html), clientDataJson: [ByteArray](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-byte-array/index.html), origin: [String](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-string/index.html)): [ByteArray](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-byte-array/index.html)<br>Packs an ES256 WebAuthn assertion for OpenSSH. Signed client JSON and extension bytes are preserved verbatim. The caller supplies the origin from clientDataJSON. Use the original SSH signing bytes as the WebAuthn challenge, without hashing. |
