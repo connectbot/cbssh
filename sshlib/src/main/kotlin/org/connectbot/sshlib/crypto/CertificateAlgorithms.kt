@@ -40,6 +40,10 @@ internal fun certificateAlgorithm(name: String): String? = when (name) {
     "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
     -> name + CERTIFICATE_SUFFIX
 
+    "sk-ssh-ed25519@openssh.com" -> "sk-ssh-ed25519$CERTIFICATE_SUFFIX"
+
+    "sk-ecdsa-sha2-nistp256@openssh.com" -> "sk-ecdsa-sha2-nistp256$CERTIFICATE_SUFFIX"
+
     else -> null
 }
 
