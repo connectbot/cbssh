@@ -345,6 +345,8 @@ internal enum class SignatureEntry(
     RSA_SHA2_256("rsa-sha2-256", RsaSignatureAlgorithm),
     RSA_SHA2_512("rsa-sha2-512", RsaSignatureAlgorithm),
     SSH_RSA(KEY_TYPE_SSH_RSA, RsaSignatureAlgorithm),
+    SK_ED25519("sk-ssh-ed25519@openssh.com", SkSignatureAlgorithm),
+    SK_ECDSA_P256("sk-ecdsa-sha2-nistp256@openssh.com", SkSignatureAlgorithm),
     ;
 
     companion object {

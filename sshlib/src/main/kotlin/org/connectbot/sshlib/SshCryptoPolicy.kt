@@ -105,7 +105,7 @@ class SshCryptoPolicy private constructor(
             }
             val pubkeys = hostKeys.map { entry ->
                 entry.copy(defaultEnabled = entry.defaultEnabled || (certificateAlgorithm(certificateSignatureAlgorithm(entry.name)) == entry.name && signatures.any { it.name == certificateSignatureAlgorithm(entry.name) && it.defaultEnabled }))
-            } + listOf("sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com", "sk-ssh-ed25519-cert-v01@openssh.com", "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com").map { SshAlgorithm(it, true, true) }
+            }
             return mapOf(
                 AlgorithmCategory.KEX to KexEntry.entries.map { SshAlgorithm(it.sshName, true, it in KexEntry.defaults) },
                 AlgorithmCategory.CIPHER to CipherEntry.entries.map { SshAlgorithm(it.sshName, cipherAvailable(it), it in CipherEntry.defaults) },
@@ -128,9 +128,9 @@ class SshCryptoPolicy private constructor(
                 mldsa.isAvailable()
             } else {
                 val (signature, keyFactory) = when {
-                    entry.sshName == "ssh-ed25519" -> "Ed25519" to "Ed25519"
+                    entry.sshName in setOf("ssh-ed25519", "sk-ssh-ed25519@openssh.com") -> "Ed25519" to "Ed25519"
                     entry.sshName == "ssh-ed448" -> "Ed448" to "Ed448"
-                    entry.sshName.endsWith("nistp256") -> "SHA256withECDSA" to "EC"
+                    (entry.sshName.endsWith("nistp256") || entry.sshName == "sk-ecdsa-sha2-nistp256@openssh.com") -> "SHA256withECDSA" to "EC"
                     entry.sshName.endsWith("nistp384") -> "SHA384withECDSA" to "EC"
                     entry.sshName.endsWith("nistp521") -> "SHA512withECDSA" to "EC"
                     entry.sshName == "rsa-sha2-512" -> "SHA512withRSA" to "RSA"

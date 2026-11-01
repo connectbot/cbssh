@@ -47,9 +47,9 @@ internal fun verifyHostKeyProofs(
             algorithm in setOf("rsa-sha2-256", "rsa-sha2-512") && algorithm in allowedAlgorithms &&
                 (negotiatedAlgorithm !in setOf("ssh-rsa", "rsa-sha2-256", "rsa-sha2-512") || algorithm == negotiatedAlgorithm)
         } else {
-            algorithm == key.type && algorithm in allowedAlgorithms
+            signatureMatchesNegotiatedAlgorithm(algorithm, key.type) && key.type in allowedAlgorithms
         }
-        permitted && SignatureVerifier.verify(key.encoded, bytes, hostKeyProofData(sessionId, key.encoded), algorithm)
+        permitted && SignatureVerifier.verify(key.encoded, bytes, hostKeyProofData(sessionId, key.encoded), signatureVerificationAlgorithm(algorithm))
     }
 } catch (_: Exception) {
     false

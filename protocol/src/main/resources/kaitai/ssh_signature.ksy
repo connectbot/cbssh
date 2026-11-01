@@ -47,4 +47,5 @@ seq:
       '"ssh-mldsa44-ed25519"': ssh_mldsa_signature_blob(2484)
       '"ssh-mldsa87-p384"': ssh_mldsa_p384_signature_blob
       '"webauthn-sk-ecdsa-sha2-nistp256@openssh.com"': webauthn_sk_signature_blob
+      '"webauthn-sk-ecdsa-sha2-nistp256-cert-v01@openssh.com"': webauthn_sk_signature_blob
       _: byte_string

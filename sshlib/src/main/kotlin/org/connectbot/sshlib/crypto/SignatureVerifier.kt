@@ -52,7 +52,7 @@ internal object SignatureVerifier {
 
         // RFC 8332 §3.2: reject if the algorithm in the signature blob doesn't match
         // what was negotiated. Prevents a server from downgrading e.g. rsa-sha2-256 → ssh-rsa.
-        if (expectedAlgorithm.endsWith(CERTIFICATE_SUFFIX) || sig.algorithmName() != expectedAlgorithm) {
+        if (!signatureMatchesNegotiatedAlgorithm(sig.algorithmName(), expectedAlgorithm)) {
             return false
         }
 
@@ -60,7 +60,7 @@ internal object SignatureVerifier {
         pubKey._read()
         if (MldsaAlgorithm.fromSshName(pubKey.algorithmName()) != null && !pubKey._io().isEof) return false
 
-        if (!isAlgorithmCompatibleWithKeyType(expectedAlgorithm, pubKey.algorithmName())) {
+        if (!signatureAlgorithmMatchesKeyType(expectedAlgorithm, pubKey.algorithmName())) {
             return false
         }
         if (expectedAlgorithm.startsWith("ecdsa-sha2-") &&
@@ -69,7 +69,7 @@ internal object SignatureVerifier {
             return false
         }
 
-        val algorithm = SignatureEntry.fromSshName(sig.algorithmName())?.algorithm
+        val algorithm = SignatureEntry.fromSshName(expectedAlgorithm)?.algorithm
             ?: return false
 
         return algorithm.verify(pubKey, sig, exchangeHash)
@@ -99,16 +99,11 @@ internal object SignatureVerifier {
         val keyType = pubKey.algorithmName()
 
         // Ensure the sig algorithm is compatible with the key type to prevent cross-type forgery.
-        if (!isAlgorithmCompatibleWithKeyType(sigAlgorithm, keyType)) {
+        if (!signatureAlgorithmMatchesKeyType(sigAlgorithm, keyType)) {
             return false
         }
 
-        val algorithm = SignatureEntry.fromSshName(sigAlgorithm)?.algorithm ?: return false
+        val algorithm = SignatureEntry.fromSshName(signatureVerificationAlgorithm(sigAlgorithm))?.algorithm ?: return false
         return algorithm.verify(pubKey, sig, data)
-    }
-
-    private fun isAlgorithmCompatibleWithKeyType(algorithm: String, keyType: String): Boolean = when (algorithm) {
-        "ssh-rsa", "rsa-sha2-256", "rsa-sha2-512" -> keyType == "ssh-rsa"
-        else -> algorithm == keyType
     }
 }
