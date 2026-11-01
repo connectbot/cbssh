@@ -242,6 +242,13 @@ internal enum class KexEntry(
         false,
         { Curve25519KeyExchange() },
     ),
+    CURVE25519_SHA256_LIBSSH(
+        "curve25519-sha256@libssh.org",
+        HASH_SHA256,
+        KexType.ECDH,
+        false,
+        { Curve25519KeyExchange() },
+    ),
     ECDH_SHA2_NISTP256(
         "ecdh-sha2-nistp256",
         HASH_SHA256,
