@@ -2,12 +2,31 @@
 
 ## Unreleased
 
+Changes for library users since `0.6.7`.
+
+## [0.6.7][0.6.7]
+
+Changes for library users since `0.6.6`.
+
+### Added
+
+- Added OpenSSH WebAuthn signature packing and the optional `sshlib-webauthn`
+  artifact for JSON request/response handling when integrating passkey
+  authentication. See [WebAuthn integration](docs/SK_AUTH.md#webauthn--android-credential-manager).
+- Added Security Key host-key verification for Ed25519 and ECDSA P-256,
+  including WebAuthn signatures and Security Key host certificates.
+- Added support for the `curve25519-sha256@libssh.org` key-exchange alias
+  for compatibility with older SSH servers.
+
+## [0.6.6][0.6.6]
+
 Changes for library users since `0.6.5`.
 
-## Added
+### Fixed
 
-- Add OpenSSH WebAuthn signature packing and optional `sshlib-webauthn`
-  request/response adapter.
+- Reduced Diffie-Hellman group-exchange handshake delays on slower devices by
+  removing expensive safe-prime tests of server-supplied groups while retaining
+  structural parameter checks.
 
 ## [0.6.5][0.6.5]
 
@@ -296,6 +315,8 @@ Changes for library users since `0.2.1`.
 - Limited zlib decompression output per packet to reduce decompression-bomb
   denial-of-service risk.
 
+[0.6.7]: https://github.com/connectbot/cbssh/compare/v0.6.6...v0.6.7
+[0.6.6]: https://github.com/connectbot/cbssh/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/connectbot/cbssh/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/connectbot/cbssh/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/connectbot/cbssh/compare/v0.6.2...v0.6.3
