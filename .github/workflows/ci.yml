@@ -147,7 +147,7 @@ jobs:
       actions: read
       id-token: write
       attestations: write
-    uses: connectbot/actions/.github/workflows/publish-maven.yml@9b826116f0d49329fbe10985a5abdfa49562f0a0 # v0.2.0
+    uses: connectbot/actions/.github/workflows/publish-maven.yml@afbe5170d337a112404df279d64fb3cdf0d6b1ee # v0.2.1
     with:
       maven_group: org.connectbot.sshlib
       modules: protocol,sshlib,sshlib-webauthn
