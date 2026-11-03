@@ -3,12 +3,12 @@
   "versions": {
     "main": {
       "published": {
-        "commit": "4f06075fc801648dd728f14361bdcb9a4a7b12dd",
+        "commit": "88a9c8dea70ac33ff69a7a8a17f243bf4d1901db",
         "config": "22e69856a79c32a9fbdc75bc3a21825aff1aec2e8904fc0769b784c43193710d",
         "policy": 1
       },
       "attempt": {
-        "commit": "4f06075fc801648dd728f14361bdcb9a4a7b12dd",
+        "commit": "88a9c8dea70ac33ff69a7a8a17f243bf4d1901db",
         "config": "22e69856a79c32a9fbdc75bc3a21825aff1aec2e8904fc0769b784c43193710d",
         "policy": 1,
         "status": "success"
