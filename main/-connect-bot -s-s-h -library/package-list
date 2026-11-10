@@ -553,6 +553,7 @@ $dokka.location:org.connectbot.sshlib/SshSession/stderr/#/PointingToDeclaration/
 $dokka.location:org.connectbot.sshlib/SshSession/stdout/#/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib/-ssh-session/stdout.html
 $dokka.location:org.connectbot.sshlib/SshSession/write/#kotlin.ByteArray/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib/-ssh-session/write.html
 $dokka.location:org.connectbot.sshlib/SshSigning///PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib/-ssh-signing/index.html
+$dokka.location:org.connectbot.sshlib/SshSigning/encodeEcdsaSignature/#kotlin.String#kotlin.ByteArray/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib/-ssh-signing/encode-ecdsa-signature.html
 $dokka.location:org.connectbot.sshlib/SshSigning/encodePublicKey/#java.security.KeyPair/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib/-ssh-signing/encode-public-key.html
 $dokka.location:org.connectbot.sshlib/SshSigning/encodePublicKeyBlob/#java.security.PublicKey/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib/-ssh-signing/encode-public-key-blob.html
 $dokka.location:org.connectbot.sshlib/SshSigning/getPublicKey/#kotlin.String#kotlin.ByteArray#kotlin.String?/PointingToDeclaration/-connect-bot -s-s-h -library/org.connectbot.sshlib/-ssh-signing/get-public-key.html
