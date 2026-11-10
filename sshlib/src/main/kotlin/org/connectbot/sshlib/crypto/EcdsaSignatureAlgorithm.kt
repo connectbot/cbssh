@@ -84,11 +84,13 @@ internal object EcdsaSignatureAlgorithm : SshSignatureAlgorithm {
 
     internal fun decodeDerEcdsaSignature(derSig: ByteArray): Pair<BigInteger, BigInteger> {
         val reader = DerReader(derSig)
-        return reader.readSequence { seq ->
+        val components = reader.readSequence { seq ->
             val r = seq.readInteger()
             val s = seq.readInteger()
             r to s
         }
+        reader.ensureFullyConsumed()
+        return components
     }
 
     override fun sign(algorithmName: String, privateKey: PrivateKey, data: ByteArray): ByteArray {
@@ -107,9 +109,21 @@ internal object EcdsaSignatureAlgorithm : SshSignatureAlgorithm {
         signer.update(data)
         val derSig = signer.sign()
 
-        val (r, s) = decodeDerEcdsaSignature(derSig)
-        val sshSigBlob = encodeMpint(r.toByteArray()) + encodeMpint(s.toByteArray())
+        return encodeSignature(algorithmName, derSig)
+    }
 
+    internal fun encodeSignature(algorithmName: String, derSignature: ByteArray): ByteArray {
+        val maxBits = when (algorithmName) {
+            "ecdsa-sha2-nistp256" -> 256
+            "ecdsa-sha2-nistp384" -> 384
+            "ecdsa-sha2-nistp521" -> 521
+            else -> throw SshException("Unsupported ECDSA signature algorithm: $algorithmName")
+        }
+        val (r, s) = decodeDerEcdsaSignature(derSignature)
+        if (r.signum() <= 0 || s.signum() <= 0 || r.bitLength() > maxBits || s.bitLength() > maxBits) {
+            throw SshException("ECDSA signature components must be positive and fit the selected curve")
+        }
+        val sshSigBlob = encodeMpint(r.toByteArray()) + encodeMpint(s.toByteArray())
         return encodeSshString(algorithmName.toByteArray(Charsets.US_ASCII)) +
             encodeSshString(sshSigBlob)
     }
