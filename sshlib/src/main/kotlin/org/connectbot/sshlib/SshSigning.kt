@@ -17,6 +17,7 @@
 
 package org.connectbot.sshlib
 
+import org.connectbot.sshlib.crypto.EcdsaSignatureAlgorithm
 import org.connectbot.sshlib.crypto.MldsaAlgorithm
 import org.connectbot.sshlib.crypto.PrivateKeyReader
 import org.connectbot.sshlib.crypto.SignatureEntry
@@ -34,6 +35,21 @@ import java.security.PublicKey
  * directly instead.
  */
 object SshSigning {
+    /**
+     * Wrap an externally generated DER ECDSA signature in the SSH signature format.
+     *
+     * Use for hardware signers from [AuthHandler.onSignatureRequest]. The input must
+     * be a DER SEQUENCE of two positive INTEGERs, not raw concatenated r and s.
+     * Supports ecdsa-sha2-nistp256, ecdsa-sha2-nistp384, and ecdsa-sha2-nistp521.
+     * This encodes the signature; it does not hash data or verify the signature.
+     *
+     * @param algorithmName SSH ECDSA signature algorithm matching the signing key
+     * @param derSignature DER signature returned by the external signer
+     * @return Complete SSH signature blob, including the algorithm name
+     * @throws SshException if the algorithm or signature encoding is invalid
+     */
+    fun encodeEcdsaSignature(algorithmName: String, derSignature: ByteArray): ByteArray = EcdsaSignatureAlgorithm.encodeSignature(algorithmName, derSignature)
+
     /**
      * Sign authentication data using a private key.
      *

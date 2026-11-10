@@ -1,6 +1,6 @@
 /*
  * ConnectBot SSH Library
- * Copyright 2025 Kenny Root
+ * Copyright 2025-2026 Kenny Root
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,47 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SshSigningTest {
+    @Test
+    fun `external ECDSA signatures verify for every supported curve`() {
+        for ((curve, hash) in listOf("256" to "256", "384" to "384", "521" to "512")) {
+            val key = KeyPairGenerator.getInstance("EC").apply {
+                initialize(ECGenParameterSpec("secp${curve}r1"))
+            }.generateKeyPair()
+            val data = "external hardware signer".toByteArray()
+            val der = java.security.Signature.getInstance("SHA${hash}withECDSA").run {
+                initSign(key.private)
+                update(data)
+                sign()
+            }
+            val algorithm = "ecdsa-sha2-nistp$curve"
+            val encoded = SshSigning.encodeEcdsaSignature(algorithm, der)
+            val publicKey = SshPublicKey(ByteBufferKaitaiStream(SshSigning.encodePublicKey(key).publicKeyBlob)).apply { _read() }
+            val signature = SshSignature(ByteBufferKaitaiStream(encoded)).apply { _read() }
+            assertTrue(SignatureEntry.fromSshName(algorithm)!!.algorithm.verify(publicKey, signature, data))
+            assertFailsWith<SshException> { SshSigning.encodeEcdsaSignature(algorithm, der + byteArrayOf(0)) }
+            assertFailsWith<SshException> { SshSigning.encodeEcdsaSignature(algorithm, der.copyOf(der.size - 1)) }
+        }
+    }
+
+    @Test
+    fun `external ECDSA encoding rejects invalid components and algorithms`() {
+        val valid = byteArrayOf(0x30, 6, 2, 1, 1, 2, 1, 1)
+        for (algorithm in listOf("ssh-rsa", "sk-ecdsa-sha2-nistp256@openssh.com", "unknown")) {
+            assertFailsWith<SshException> { SshSigning.encodeEcdsaSignature(algorithm, valid) }
+        }
+        for (invalid in listOf(
+            byteArrayOf(),
+            valid.copyOf().apply { this[4] = 0 },
+            valid.copyOf().apply { this[4] = -1 },
+            byteArrayOf(0x30, 7, 2, 2, 0, 1, 2, 1, 1),
+            org.connectbot.sshlib.crypto.EcdsaSignatureAlgorithm.encodeDerEcdsaSignature(
+                java.math.BigInteger.ONE.shiftLeft(256),
+                java.math.BigInteger.ONE,
+            ),
+        )) {
+            assertFailsWith<SshException> { SshSigning.encodeEcdsaSignature("ecdsa-sha2-nistp256", invalid) }
+        }
+    }
 
     private fun readKey(resourcePath: String): String = javaClass.getResourceAsStream("/keys/$resourcePath")!!
         .bufferedReader().readText()

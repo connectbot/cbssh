@@ -948,6 +948,7 @@ package org.connectbot.sshlib {
   }
 
   public final class SshSigning {
+    method public byte[] encodeEcdsaSignature(java.lang.String algorithmName, byte[] derSignature);
     method public org.connectbot.sshlib.AuthPublicKey encodePublicKey(KeyPair keyPair);
     method public byte[] encodePublicKeyBlob(org.connectbot.sshlib.PublicKey publicKey);
     method public org.connectbot.sshlib.AuthPublicKey getPublicKey(java.lang.String algorithmName, byte[] privateKeyData, java.lang.String? passphrase);
