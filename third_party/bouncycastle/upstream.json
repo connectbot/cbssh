@@ -1,6 +1,6 @@
 {
   "artifact": "org.bouncycastle:bcprov-jdk18on",
-  "version": "1.86",
+  "version": "1.87",
   "reviewedVersion": "1.86",
   "files": {
     "org/bouncycastle/pqc/crypto/ntruprime/SNTRUPrimeKEMExtractor.java": {
