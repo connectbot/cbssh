@@ -112,6 +112,14 @@ class Sntrup761Test {
             val extracted = SNTRUPrimeKEMExtractor(actualPrivate)
             val bc = BcExtractor(expectedPrivate)
             assertContentEquals(encapsulated.secret, extracted.extractSecret(encapsulated.encapsulation))
+            // Rejection must bind the received ciphertext, even when both inputs decode to the same r.
+            val firstInvalid = encapsulated.encapsulation.clone().apply {
+                this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte()
+            }
+            val secondInvalid = encapsulated.encapsulation.clone().apply {
+                this[lastIndex] = (this[lastIndex].toInt() xor 2).toByte()
+            }
+            assertFalse(extracted.extractSecret(firstInvalid).contentEquals(extracted.extractSecret(secondInvalid)))
             // Exercise both the polynomial body and the confirmation-hash portion.
             for (offset in listOf(0, 1006, 1007, 1038)) {
                 val damaged = encapsulated.encapsulation.also { it[offset] = (it[offset].toInt() xor 1).toByte() }

@@ -280,6 +280,30 @@ public class SNTRUPrimePrivateKeyParameters {
                     with self.assertRaisesRegex(ValueError, "Upstream small-polynomial encoding changed"):
                         vendor.client_utils(sources)
 
+    def test_sntrup_batch_random_words_and_arithmetic_constants(self):
+        sources = {
+            vendor.NTRU + "Caller.java": "class Caller { void call() { Utils.getRandomUnsignedIntegers(); } }",
+            vendor.NTRU + "Utils.java": """class Utils {
+    static final long BARRETT_3 = 0x100000000L / 3;
+    private static final int KARATSUBA_THRESHOLD = 32;
+    private static final int UNUSED = 99;
+    static void getRandomUnsignedIntegers()
+    {
+        int[] L = new int[KARATSUBA_THRESHOLD];
+        byte[] bytes = new byte[L.length * 4];
+        Pack.littleEndianToInt(bytes, 0, L);
+        long factor = BARRETT_3;
+    }
+}
+""",
+        }
+        result = vendor.client_utils(sources)
+        self.assertIn("static final long BARRETT_3 = 0x100000000L / 3;", result)
+        self.assertIn("private static final int KARATSUBA_THRESHOLD = 32;", result)
+        self.assertNotIn("UNUSED", result)
+        self.assertNotIn("Pack.", result)
+        self.assertIn(".order(java.nio.ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(L);", result)
+
     def test_transitive_math_helpers_are_retained_and_unrelated_aes_is_removed(self):
         sources = {
             vendor.NTRU + "Caller.java": "class Caller { int x() { return Utils.outer(); } }",

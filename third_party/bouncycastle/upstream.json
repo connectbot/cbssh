@@ -1,11 +1,11 @@
 {
   "artifact": "org.bouncycastle:bcprov-jdk18on",
   "version": "1.87",
-  "reviewedVersion": "1.86",
+  "reviewedVersion": "1.87",
   "files": {
     "org/bouncycastle/pqc/crypto/ntruprime/SNTRUPrimeKEMExtractor.java": {
-      "originalSha256": "85a252478fd33b48e804738f6d45c53d5e60b59b0eb2451ef520b2f61c17ca8f",
-      "extractedSha256": "e25b65a08f7bc3d6e9d5a613ba44e09d5336341c8977eb360fd627d40f4e8cf1"
+      "originalSha256": "1a3aedd2575e22cccc38f9696bebc8cf27bf3fe6ce31a92ccbe1a761ecb6cf5a",
+      "extractedSha256": "ff91a710935db24a5f8fd4638eb46405da1fa5e8d2acd3a9d0335b68c21a0b23"
     },
     "org/bouncycastle/pqc/crypto/ntruprime/SNTRUPrimeKeyGenerationParameters.java": {
       "originalSha256": "4cd69716f2e806aeb3617eede613503a46882b94576ecc24943384a34fb31488",
@@ -32,8 +32,8 @@
       "extractedSha256": "193f317b4a5f77e836a5cc698ffb90ae2e2716b2b136a2a5413cca7bd9ac8b87"
     },
     "org/bouncycastle/pqc/crypto/ntruprime/Utils.java": {
-      "originalSha256": "21fca15a0d94e6c1aca6c7091f18e28cfdaaf92c2dfcc9a9ba74c695724d1157",
-      "extractedSha256": "5445bc60de298c8ecd779c0464159a278cb31a692957df4dd61a9fc2e9667c2f"
+      "originalSha256": "18c3981ae1584229d35c2a1db12441b71e67b51e98a375ddccc957dcaea3977a",
+      "extractedSha256": "d3daccf21c718a088fd76404be3d4c73ab1bad630c676dbaaf033a472dedf024"
     },
     "org/bouncycastle/crypto/AsymmetricCipherKeyPair.java": {
       "originalSha256": "7c898609c9a6377f9b8be32459b428c752bb980595a0c322931b4edf25c17212",
@@ -64,11 +64,11 @@
       "extractedSha256": "180f0a50d755c2c2223b2fc7ba388707f8f1e8529ecb3ab50f0cd2c40e5eb35f"
     },
     "org/bouncycastle/crypto/macs/Poly1305.java": {
-      "originalSha256": "975d3c7ecd48225a4a579e132ff2b7b69ac9cd9225aaf770d23f0a9b1247bfd7",
-      "extractedSha256": "193408df1897f1fa19589766a06bdb8356b9e64b3ae796719dd754a4b91a0fc1"
+      "originalSha256": "4f060b3cb64bc5b63570988bd0d44d49e54c169a4a43ef122fdc9943da594361",
+      "extractedSha256": "17e4200032c162185454385e8c095fd838cad54945bbce91a4089a1937d19bd4"
     },
     "org/bouncycastle/util/Pack.java": {
-      "originalSha256": "60e9b5a533ff3c4bbc5f0f86060c289153332d19544f3d312e847b8495d60cf4",
+      "originalSha256": "fe0258aeec86ef514d63dadb1166fce348e5f20db59e511529df474cd835c80e",
       "extractedSha256": "17d905b8ae428983731074bd5896fabfe9a595e8dfbc1324147b3b4e93c29228"
     },
     "META-INF/LICENSE.md": {

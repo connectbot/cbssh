@@ -10,25 +10,41 @@ import java.security.SecureRandom;
 
 class Utils
 {
-    protected static int getRandomUnsignedInteger(SecureRandom random)
+    static final long BARRETT_3 = 0x100000000L / 3;
+    private static final int KARATSUBA_THRESHOLD = 32;
+    private static void getRandomUnsignedIntegers(SecureRandom random, int[] L)
     {
-        byte[] c = new byte[4];
-        random.nextBytes(c);
-        return (bToUnsignedInt(c[0])
-                + (bToUnsignedInt(c[1]) << 8)
-                + (bToUnsignedInt(c[2]) << 16)
-                + (bToUnsignedInt(c[3]) << 24));
+        byte[] bytes = new byte[L.length * 4];
+        random.nextBytes(bytes);
+        java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(L);
     }
 
     protected static void getRandomSmallPolynomial(SecureRandom random, byte[] g)
     {
+        int[] L = new int[g.length];
+        getRandomUnsignedIntegers(random, L);
         for (int i = 0; i < g.length; i++)
-            g[i] = (byte)((((getRandomUnsignedInteger(random) & 0x3fffffff) * 3) >>> 30) - 1);
+            g[i] = (byte)((((L[i] & 0x3fffffff) * 3) >>> 30) - 1);
     }
 
-    protected static int getModFreeze(int x, int n)
+    protected static long getBarrettFactor(int n)
     {
-        return getSignedDivMod((x + ((n - 1) / 2)), n)[1] - ((n - 1) / 2);
+        return 0x100000000L / n;
+    }
+
+    protected static int getModFreeze(int x, int n, long barrett)
+    {
+        int y = x + ((n - 1) / 2);
+        int r = y - n * (int)((y * barrett) >> 32);
+        r += n & (r >> 31);
+        r -= n;
+        r += n & (r >> 31);
+        return r - ((n - 1) / 2);
+    }
+
+    private static int getSmallModFreeze3(int x)
+    {
+        return x + 3 * (((1 - x) >> 31) - ((x + 1) >> 31));
     }
 
     protected static boolean isInvertiblePolynomialInR3(byte[] g, byte[] ginv, int p)
@@ -69,10 +85,11 @@ class Utils
                 r[i] ^= t;
             }
 
+            // g is small, so f, h, r, v and sign all stay in {-1, 0, 1} and the sums in [-2, 2]
             for (i = 0; i < p + 1; i++)
-                h[i] = (byte)getModFreeze(h[i] + sign * f[i], 3);
+                h[i] = (byte)getSmallModFreeze3(h[i] + sign * f[i]);
             for (i = 0; i < p + 1; i++)
-                r[i] = (byte)getModFreeze(r[i] + sign * v[i], 3);
+                r[i] = (byte)getSmallModFreeze3(r[i] + sign * v[i]);
 
             for (i = 0; i < p; i++)
                 h[i] = h[i+1];
@@ -137,16 +154,27 @@ class Utils
     protected static void getRandomShortPolynomial(SecureRandom random, byte[] f, int p, int w)
     {
         int[] L = new int[p];
-        for (int i = 0; i < p; i++)
-            L[i] = getRandomUnsignedInteger(random);
+        getRandomUnsignedIntegers(random, L);
         sortGenerateShortPolynomial(f, L, p, w);
     }
 
     protected static int getInverseInRQ(int x, int q)
     {
+        // x^(q - 2) by square-and-multiply: the exponent is public, so the sequence of operations depends on q alone
+        long barrett = getBarrettFactor(q);
+        int e = q - 2, bit = 0;
+        while ((e >>> bit) > 1)
+            bit++;
+
         int ai = x;
-        for (int i = 1; i < q - 2; i++)
-            ai = getModFreeze(x * ai, q);
+        while (--bit >= 0)
+        {
+            ai = getModFreeze(ai * ai, q, barrett);
+            if (((e >>> bit) & 1) != 0)
+            {
+                ai = getModFreeze(ai * x, q, barrett);
+            }
+        }
         return ai;
     }
 
@@ -157,6 +185,7 @@ class Utils
         short[] r = new short[p + 1];
         short[] v = new short[p + 1];
         int loop, delta, scale, swap, h0, g0, t, i;
+        long barrett = getBarrettFactor(q);
 
         r[0] = (short)getInverseInRQ(3, q);
         h[0] = 1;
@@ -190,9 +219,9 @@ class Utils
             h0 = h[0];
             g0 = g[0];
             for (i = 0; i < p + 1; i++)
-                g[i] = (short)getModFreeze((h0 * g[i]) - (g0 * h[i]), q);
+                g[i] = (short)getModFreeze((h0 * g[i]) - (g0 * h[i]), q, barrett);
             for (i = 0; i < p + 1; i++)
-                r[i] = (short)getModFreeze((h0 * r[i]) - (g0 * v[i]), q);
+                r[i] = (short)getModFreeze((h0 * r[i]) - (g0 * v[i]), q, barrett);
 
             for (i = 0; i < p; i++)
                 g[i] = g[i+1];
@@ -201,97 +230,174 @@ class Utils
 
         scale = getInverseInRQ(h[0], q);
         for (i = 0; i < p; i++)
-            finv3[i] = (short)getModFreeze(scale * v[p - 1 - i], q);
+            finv3[i] = (short)getModFreeze(scale * v[p - 1 - i], q, barrett);
+    }
+
+    private static int getKaratsubaLength(int p)
+    {
+        int k = 0;
+        while (((p - 1) >> k) + 1 > KARATSUBA_THRESHOLD)
+            k++;
+        return (((p - 1) >> k) + 1) << k;
+    }
+
+    private static void karatsuba(int[] a, int aOff, int[] b, int bOff, int n, int[] r, int rOff, int[] t, int tOff)
+    {
+        if (n <= KARATSUBA_THRESHOLD)
+        {
+            for (int i = 0; i < 2 * n - 1; i++)
+            {
+                r[rOff + i] = 0;
+            }
+            for (int i = 0; i < n; i++)
+            {
+                int ai = a[aOff + i];
+                for (int j = 0; j < n; j++)
+                {
+                    r[rOff + i + j] += ai * b[bOff + j];
+                }
+            }
+            return;
+        }
+
+        int m = n >>> 1;
+
+        // z0 = a0 * b0 and z2 = a1 * b1, straight into place
+        karatsuba(a, aOff, b, bOff, m, r, rOff, t, tOff);
+        karatsuba(a, aOff + m, b, bOff + m, m, r, rOff + 2 * m, t, tOff);
+        r[rOff + 2 * m - 1] = 0;
+
+        // z1 = (a0 + a1) * (b0 + b1) - z0 - z2, completed before it is added in, since it overlaps z0 and z2
+        int sa = tOff, sb = tOff + m, z1 = tOff + 2 * m;
+        for (int i = 0; i < m; i++)
+        {
+            t[sa + i] = a[aOff + i] + a[aOff + m + i];
+            t[sb + i] = b[bOff + i] + b[bOff + m + i];
+        }
+        karatsuba(t, sa, t, sb, m, t, z1, t, z1 + 2 * m - 1);
+        for (int i = 0; i < 2 * m - 1; i++)
+        {
+            t[z1 + i] -= r[rOff + i] + r[rOff + 2 * m + i];
+        }
+        for (int i = 0; i < 2 * m - 1; i++)
+        {
+            r[rOff + m + i] += t[z1 + i];
+        }
+    }
+
+    private static int[] getProductModXpX1(int[] a, int[] b, int p)
+    {
+        int n = a.length;
+        int[] fg = new int[2 * n - 1];
+        karatsuba(a, 0, b, 0, n, fg, 0, new int[4 * n], 0);
+
+        // x^p = x + 1
+        for (int i = p + p - 2; i >= p; i--)
+        {
+            fg[i - p] += fg[i];
+            fg[i - p + 1] += fg[i];
+        }
+        return fg;
     }
 
     protected static void multiplicationInRQ(short[] h, short[] finv3, byte[] g, int p, int q)
     {
-        short[] fg = new short[p + p - 1];
-        short result;
-        int i, j;
-
-        for (i = 0; i < p; i++)
+        int n = getKaratsubaLength(p);
+        int[] a = new int[n];
+        int[] b = new int[n];
+        for (int i = 0; i < p; i++)
         {
-            result = 0;
-            for (j = 0; j <= i; j++)
-                result = (short)getModFreeze(result + (finv3[j] * g[i - j]), q);
-            fg[i] = result;
+            a[i] = finv3[i];
+            b[i] = g[i];
         }
 
-        for (i = p; i < p + p - 1; i++)
-        {
-            result = 0;
-            for (j = i - p + 1; j < p; j++)
-                result = (short)getModFreeze(result + (finv3[j] * g[i - j]), q);
-            fg[i] = result;
-        }
+        int[] fg = getProductModXpX1(a, b, p);
 
-        for (i = p + p - 2; i >= p; i--)
+        long barrett = getBarrettFactor(q);
+        for (int i = 0; i < p; i++)
         {
-            fg[i - p] = (short)getModFreeze(fg[i - p] + fg[i], q);
-            fg[i - p + 1] = (short)getModFreeze(fg[i - p + 1] + fg[i], q);
+            h[i] = (short)getModFreeze(fg[i], q, barrett);
         }
-
-        for (i = 0; i < p; i++)
-            h[i] = fg[i];
     }
 
-    private static void encode(byte[] out, short[] R, short[] M, int len, int start)
+    private static int getPairBytes(int mm)
     {
-        if (len == 1)
+        int bytes = 0;
+        while (mm >= 16384)
         {
-            short r = R[0];
-            short m = M[0];
-            while (m > 1)
+            mm = (mm + 255) >>> 8;
+            bytes++;
+        }
+        return bytes;
+    }
+
+    private static int getPairModulus(int mm)
+    {
+        while (mm >= 16384)
+        {
+            mm = (mm + 255) >>> 8;
+        }
+        return mm;
+    }
+
+    private static void encode(byte[] out, short[] R, int n, int m, int mLast)
+    {
+        int pos = 0;
+
+        while (n > 1)
+        {
+            int pairs = n >>> 1;
+            boolean lastPaired = (n & 1) == 0;
+
+            int b = getPairBytes(m * m), m2 = getPairModulus(m * m);
+            int bLast = 0, m2Last = mLast;
+            if (lastPaired)
             {
-                out[start++] = (byte)r;
-                r = (short)(r >>> 8);
-                m = (short)((m + 255) >>> 8);
+                bLast = getPairBytes(m * mLast);
+                m2Last = getPairModulus(m * mLast);
             }
+
+            // pair j's combined value replaces R[j], which has been read by then
+            for (int j = 0; j < pairs; j++)
+            {
+                int bj = (lastPaired && j == pairs - 1) ? bLast : b;
+
+                int r = R[2 * j] + R[2 * j + 1] * m;
+                for (int k = 0; k < bj; k++)
+                {
+                    out[pos++] = (byte)r;
+                    r >>>= 8;
+                }
+                R[j] = (short)r;
+            }
+
+            if (!lastPaired)
+            {
+                R[pairs] = R[n - 1];
+            }
+
+            n = pairs + (n & 1);
+            m = m2;
+            mLast = m2Last;
         }
 
-        if (len > 1)
+        int r0 = R[0];
+        while (mLast > 1)
         {
-            short[] R2 = new short[(len + 1) / 2];
-            short[] M2 = new short[(len + 1) / 2];
-            int i;
-
-            for (i = 0; i < len - 1; i += 2)
-            {
-                int m0 = M[i];
-                int r = R[i] + (R[i + 1] * m0);
-                int m = M[i + 1] * m0;
-                while (m >= 16384)
-                {
-                    out[start++] = (byte)r;
-                    r = r >>> 8;
-                    m = (m + 255) >>> 8;
-                }
-                R2[i / 2] = (short)r;
-                M2[i / 2] = (short)m;
-            }
-
-            if (i < len)
-            {
-                R2[i / 2] = R[i];
-                M2[i / 2] = M[i];
-            }
-
-            encode(out, R2, M2,(len + 1) / 2, start);
+            out[pos++] = (byte)r0;
+            r0 >>>= 8;
+            mLast = (mLast + 255) >>> 8;
         }
     }
 
     protected static void getEncodedPolynomial(byte[] enc, short[] h, int p, int q)
     {
         short[] R = new short[p];
-        short[] M = new short[p];
 
         for (int i = 0; i < p; i++)
             R[i] = (short)(h[i] + ((q - 1) / 2));
-        for (int i = 0; i < p; i++)
-            M[i] = (short)q;
 
-        encode(enc, R, M, p, 0);
+        encode(enc, R, p, q, q);
     }
 
     protected static void getEncodedSmallPolynomial(byte[] encSP, byte[] sp, int p)
@@ -310,29 +416,21 @@ class Utils
         encSP[encSPIndex] = (byte)(sp[spIndex] + 1);
     }
 
-    private static int getUnsignedMod(int x, int n)
-    {
-        return getUnsignedDivMod(x, n)[1];
-    }
-
     protected static void roundPolynomial(short[] out, short[] in)
     {
         for (int i = 0; i < out.length; i++)
-            out[i] = (short)(in[i] - getModFreeze(in[i], 3));
+            out[i] = (short)(in[i] - getModFreeze(in[i], 3, BARRETT_3));
     }
 
     protected static void getRoundedEncodedPolynomial(byte[] out, short[] in, int p, int q)
     {
         short[] R = new short[p];
-        short[] M = new short[p];
 
         for (int i = 0; i < p; i++)
-        {
             R[i] = (short)(((in[i] + ((q - 1) / 2)) * 10923) >>> 15);
-            M[i] = (short)((q + 2) / 3);
-        }
 
-        encode(out, R, M, p, 0);
+        int m = (q + 2) / 3;
+        encode(out, R, p, m, m);
     }
 
     protected static byte[] getHashWithPrefix(byte[] prefix, byte[] hashInput)
@@ -349,94 +447,74 @@ class Utils
         }
     }
 
-    private static void decode(short[] out, byte[] S, short[] M, int len, int start, int sIndex)
+    private static void decode(short[] out, byte[] s, int sOff, int n, int m, int mLast)
     {
-        if (len == 1)
+        if (n == 1)
         {
-            if (M[0] == 1)
-                out[start] = 0;
-            else if (M[0] <= 256)
-                out[start] = (short)getUnsignedMod(bToUnsignedInt(S[sIndex]), M[0]);
+            if (mLast == 1)
+                out[0] = 0;
+            else if (mLast <= 256)
+                out[0] = (short)(bToUnsignedInt(s[sOff]) % mLast);
             else
-                out[start] = (short)getUnsignedMod(bToUnsignedInt(S[sIndex]) + (S[sIndex + 1] << 8), M[0]);
+                out[0] = (short)((bToUnsignedInt(s[sOff]) | (bToUnsignedInt(s[sOff + 1]) << 8)) % mLast);
+            return;
         }
 
-        if (len > 1)
+        int pairs = n >>> 1;
+        boolean lastPaired = (n & 1) == 0;
+
+        int b = getPairBytes(m * m), m2 = getPairModulus(m * m);
+        int bLast = 0, m2Last = mLast;
+        if (lastPaired)
         {
-            short[] R2 = new short[(len + 1) / 2];
-            short[] M2 = new short[(len + 1) / 2];
-            short[] bottomr = new short[len / 2];
-            int[] bottomt = new int[len / 2];
-            int i;
+            bLast = getPairBytes(m * mLast);
+            m2Last = getPairModulus(m * mLast);
+        }
 
-            for (i = 0; i < len - 1; i += 2)
+        // The pairs' bottom bytes come first, then the next level's encoding, which is decoded into the start of out
+        // and then expanded in place, from the end down so that no value is overwritten before it is read
+        int bottomBytes = (lastPaired ? pairs - 1 : pairs) * b + bLast;
+        decode(out, s, sOff + bottomBytes, pairs + (n & 1), m2, m2Last);
+
+        if (!lastPaired)
+        {
+            out[n - 1] = out[pairs];
+        }
+
+        for (int j = pairs - 1; j >= 0; j--)
+        {
+            boolean last = lastPaired && j == pairs - 1;
+            int bj = last ? bLast : b;
+            int bOff = sOff + j * b;
+
+            // below 2^14 * 2^16, since every decoded value is reduced
+            int r = out[j] << (8 * bj);
+            for (int k = 0; k < bj; k++)
             {
-                int m = M[i] * (int)M[i+1];
-                if (m > (256 * 16383))
-                {
-                    bottomt[i / 2] = 256 * 256;
-                    bottomr[i / 2] = (short)(bToUnsignedInt(S[sIndex]) + (256 * bToUnsignedInt(S[sIndex + 1])));
-                    sIndex += 2;
-                    M2[i / 2] = (short)((((m + 255) >>> 8) + 255) >>> 8);
-                }
-                else if (m >= 16384)
-                {
-                    bottomt[i / 2] = 256;
-                    bottomr[i / 2] = (short)bToUnsignedInt(S[sIndex]);
-                    sIndex += 1;
-                    M2[i / 2] = (short)((m + 255) >>> 8);
-                }
-                else
-                {
-                    bottomt[i / 2] = 1;
-                    bottomr[i / 2] = 0;
-                    M2[i / 2] = (short)m;
-                }
+                r |= bToUnsignedInt(s[bOff + k]) << (8 * k);
             }
-            if (i < len)
-                M2[i / 2] = M[i];
 
-            decode(R2, S, M2,(len + 1) / 2, start, sIndex);
-
-            for (i = 0; i < len - 1; i += 2)
-            {
-                int r = sToUnsignedInt(bottomr[i / 2]);
-                r += bottomt[i / 2] * sToUnsignedInt(R2[i / 2]);
-                int[] r01 = getUnsignedDivMod(r, M[i]);
-                out[start++] = (short)r01[1];
-                out[start++] = (short)getUnsignedMod(r01[0], M[i + 1]);
-            }
-            if (i < len)
-                out[start] = R2[i / 2];
+            out[2 * j] = (short)(r % m);
+            // the reduction is only needed for invalid inputs
+            out[2 * j + 1] = (short)((r / m) % (last ? mLast : m));
         }
     }
 
     protected static void getDecodedPolynomial(short[] h, byte[] enc, int p, int q)
     {
-        short[] R = new short[p];
-        short[] M = new short[p];
+        decode(h, enc, 0, p, q, q);
 
         for (int i = 0; i < p; i++)
-            M[i] = (short)q;
-
-        decode(R, enc, M, p, 0, 0);
-
-        for (int i = 0; i < p; i++)
-            h[i] = (short)(R[i] - ((q - 1) / 2));
+            h[i] = (short)(h[i] - ((q - 1) / 2));
     }
 
     protected static void getRoundedDecodedPolynomial(short[] h, byte[] enc, int p, int q)
     {
-        short[] R = new short[p];
-        short[] M = new short[p];
+        int m = (q + 2) / 3;
+        decode(h, enc, 0, p, m, m);
 
         for (int i = 0; i < p; i++)
-            M[i] = (short)((q + 2) / 3);
-
-        decode(R, enc, M, p, 0, 0);
-
-        for (int i = 0; i < p; i++)
-            h[i] = (short)((R[i] * 3) - ((q - 1) / 2));
+            h[i] = (short)((h[i] * 3) - ((q - 1) / 2));
     }
 
     protected static void getDecodedSmallPolynomial(byte[] sp, byte[] encSP, int p)
@@ -460,46 +538,34 @@ class Utils
 
     protected static void scalarMultiplicationInRQ(short[] out, short[] in, int scalar, int q)
     {
+        long barrett = getBarrettFactor(q);
         for (int i = 0; i < in.length; i++)
-            out[i] = (short)getModFreeze(scalar * in[i], q);
+            out[i] = (short)getModFreeze(scalar * in[i], q, barrett);
     }
 
     protected static void transformRQToR3(byte[] out, short[] in)
     {
         for (int i = 0; i < in.length; i++)
-            out[i] = (byte)getModFreeze(in[i], 3);
+            out[i] = (byte)getModFreeze(in[i], 3, BARRETT_3);
     }
 
     protected static void multiplicationInR3(byte[] h, byte[] finv3, byte[] g, int p)
     {
-        byte[] fg = new byte[p + p - 1];
-        byte result;
-        int i, j;
-
-        for (i = 0; i < p; i++)
+        int n = getKaratsubaLength(p);
+        int[] a = new int[n];
+        int[] b = new int[n];
+        for (int i = 0; i < p; i++)
         {
-            result = 0;
-            for (j = 0; j <= i; j++)
-                result = (byte) getModFreeze(result + (finv3[j] * g[i - j]), 3);
-            fg[i] = result;
+            a[i] = finv3[i];
+            b[i] = g[i];
         }
 
-        for (i = p; i < p + p - 1; i++)
-        {
-            result = 0;
-            for (j = i - p + 1; j < p; j++)
-                result = (byte)getModFreeze(result + (finv3[j] * g[i - j]), 3);
-            fg[i] = result;
-        }
+        int[] fg = getProductModXpX1(a, b, p);
 
-        for (i = p + p - 2; i >= p; i--)
+        for (int i = 0; i < p; i++)
         {
-            fg[i - p] = (byte)getModFreeze(fg[i - p] + fg[i], 3);
-            fg[i - p + 1] = (byte)getModFreeze(fg[i - p + 1] + fg[i], 3);
+            h[i] = (byte)getModFreeze(fg[i], 3, BARRETT_3);
         }
-
-        for (i = 0; i < p; i++)
-            h[i] = fg[i];
     }
 
     protected static void checkForSmallPolynomial(byte[] r, byte[] ev, int p, int w)
@@ -517,52 +583,18 @@ class Utils
             r[i] = (byte)(ev[i] & ~mask);
     }
 
+    protected static int getCiphertextDiffMask(byte[] a, byte[] b)
+    {
+        int diff = a.length ^ b.length;
+        for (int i = 0; i < a.length && i < b.length; i++)
+            diff |= a[i] ^ b[i];
+        return checkNotEqualToZero(diff);
+    }
+
     protected static void updateDiffMask(byte[] encR, byte[] rho, int mask)
     {
         for (int i = 0; i < encR.length; i++)
             encR[i] ^= mask & (encR[i] ^ rho[i]);
-    }
-
-    private static int[] getUnsignedDivMod(int dividend, int n)
-    {
-        long x = iToUnsignedLong(dividend);
-        long v = iToUnsignedLong(0x80000000);
-        long q, qpart, mask;
-
-        v /= n;
-        q = 0;
-
-        qpart = (x * v) >>> 31;
-        x -= qpart * n;
-        q += qpart;
-
-        qpart = (x * v) >>> 31;
-        x -= qpart * n;
-        q += qpart;
-
-        x -= n;
-        q += 1;
-        mask = -(x >>> 63);
-        x += mask & n;
-        q += mask;
-
-        return new int[]{toIntExact(q), toIntExact(x)};
-    }
-
-    private static int[] getSignedDivMod(int x, int n)
-    {
-        int q, r, mask;
-
-        int[] div1 = getUnsignedDivMod(toIntExact(0x80000000 + iToUnsignedLong(x)), n);
-        int[] div2 = getUnsignedDivMod(0x80000000, n);
-
-        q = toIntExact(iToUnsignedLong(div1[0]) - iToUnsignedLong(div2[0]));
-        r = toIntExact(iToUnsignedLong(div1[1]) - iToUnsignedLong(div2[1]));
-        mask = -(r >>> 31);
-        r += mask & n;
-        q += mask;
-
-        return new int[]{q, r};
     }
 
     private static int checkLessThanZero(int x)
@@ -582,24 +614,8 @@ class Utils
         return b & 0xff;
     }
 
-    static int sToUnsignedInt(short s)
-    {
-        return s & 0xffff;
-    }
-
     static long iToUnsignedLong(int i)
     {
         return i & 0xffffffffL;
-    }
-
-    static int toIntExact(long l)
-    {
-        int i = (int)l;
-
-        if (i != l)
-        {
-            throw new IllegalStateException("value out of integer range");
-        }
-        return i;
     }
 }

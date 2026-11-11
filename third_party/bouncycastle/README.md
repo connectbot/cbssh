@@ -18,6 +18,8 @@ The client-only extraction lives in `org.connectbot.sshlib.crypto.sntrup`.
 - Removes encapsulation and NTRU LPRime-only helpers, including their AES dependencies.
 - Uses JDK SHA-512, array utilities, constant-time digest comparison, and SecureRandom
   instead of BC's implementations and global registrar.
+- Uses JDK little-endian byte buffers for batched random-word decoding and retains
+  the upstream arithmetic constants used by the extracted method closure.
 - Adds private-key clearing for the connection's KEX lifecycle.
 - Masks shifted operands as unsigned bytes and makes final byte narrowing explicit
   in the small-polynomial encoder, preserving Java's compound-assignment result
@@ -33,8 +35,8 @@ The raw-key extraction lives in `org.connectbot.sshlib.crypto`.
 The extraction preserves the Java block processing, carry propagation, reduction,
 and tag calculation. It removes the optional block-cipher mode, BC interfaces,
 and single-byte convenience API. The two required endian helpers are extracted
-unchanged from BC's `Pack`. The five masked block inputs are explicitly narrowed
-to `int` before accumulator addition; their 26-bit (or smaller) values fit exactly,
+unchanged from BC's `Pack`. The five block inputs (including the full-block high
+bit) are explicitly narrowed to `int` before accumulator addition; their 26-bit (or smaller) values fit exactly,
 preserving Java's original compound-assignment arithmetic while avoiding CodeQL
 implicit-narrowing warnings. BC's output-length exception becomes
 `IllegalArgumentException`; the adapter validates input/output ranges first.
