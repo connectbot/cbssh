@@ -1,8 +1,17 @@
 # Changelog
 
-## Unreleased
+## [0.6.8][0.6.8]
 
 Changes for library users since `0.6.7`.
+
+### Added
+
+- Added public API `SshSigning.encodeEcdsaSignature()` to convert externally
+  generated DER ECDSA signatures into SSH signature blobs.
+
+### Fixed
+
+- Tightened ECDSA signature encoding validation
 
 ## [0.6.7][0.6.7]
 
@@ -315,6 +324,7 @@ Changes for library users since `0.2.1`.
 - Limited zlib decompression output per packet to reduce decompression-bomb
   denial-of-service risk.
 
+[0.6.8]: https://github.com/connectbot/cbssh/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/connectbot/cbssh/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/connectbot/cbssh/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/connectbot/cbssh/compare/v0.6.4...v0.6.5
