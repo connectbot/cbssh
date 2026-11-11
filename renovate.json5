@@ -28,6 +28,14 @@
   ],
   "packageRules": [
     {
+      "description": "Look up Vanniktech releases by implementation coordinates: Renovate skips Gradle plugin markers on Maven Central",
+      "matchManagers": ["gradle"],
+      "matchDatasources": ["maven"],
+      "matchDepNames": ["com.vanniktech.maven.publish"],
+      "overridePackageName": "com.vanniktech:gradle-maven-publish-plugin",
+      "registryUrls": ["https://repo.maven.apache.org/maven2"]
+    },
+    {
       "description": "Keep release workflows on main to match Octo STS job_workflow_ref trust policies",
       "matchManagers": [
         "github-actions"
