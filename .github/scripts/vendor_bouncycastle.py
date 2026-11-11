@@ -83,6 +83,17 @@ def client_utils(sources):
 
     for name in roots:
         visit(name)
+    # BC 1.87 batches random words and uses constants in its arithmetic helpers.
+    # Retain referenced constant declarations verbatim alongside the method closure.
+    bodies = "\n".join(methods[name] for name in needed)
+    constants = [match[0] for match in re.finditer(
+        r"^    (?:(?:protected|private|public) )?static final [^\n;]+?\b(\w+) = [^\n;]+;",
+        source, re.M) if re.search(r"\b" + match[1] + r"\b", bodies)]
+    if "getRandomUnsignedIntegers" in needed:
+        methods["getRandomUnsignedIntegers"] = replace_once(
+            methods["getRandomUnsignedIntegers"], "Pack.littleEndianToInt(bytes, 0, L);",
+            "java.nio.ByteBuffer.wrap(bytes)"
+            ".order(java.nio.ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(L);")
     # Spell out Java's compound-assignment narrowing without changing the arithmetic.
     # Mask shifted operands to avoid sign extension. Final byte narrowing preserves
     # upstream's result modulo 256, including for coefficients outside -1, 0, 1.
@@ -111,6 +122,7 @@ def client_utils(sources):
 """
     return ("package org.bouncycastle.pqc.crypto.ntruprime;\n\n"
             "import java.security.SecureRandom;\n\nclass Utils\n{\n"
+            + "\n".join(constants) + "\n"
             + "\n".join(body for name, body in methods.items() if name in needed) + "}\n")
 
 
@@ -191,14 +203,14 @@ def extract_poly1305(originals):
     source = source.replace("        throws DataLengthException,\n        IllegalStateException\n", "")
     source = replace_once(source, 'new OutputLengthException("Output buffer is too short.")', 'new IllegalArgumentException("Output buffer is too short.")')
     source = source.replace("Pack.", "Poly1305Pack.")
-    # Each masked input is at most 26 bits (24 for h4), so narrowing it is exact.
+    # Each masked input is at most 26 bits (25 for h4 including hibit), so narrowing it is exact.
     # Keep BC's int accumulator addition, including its Java overflow semantics.
     inputs = [
         "t0 & 0x3ffffff",
         "(((t1 << 32) | t0) >>> 26) & 0x3ffffff",
         "(((t2 << 32) | t1) >>> 20) & 0x3ffffff",
         "(((t3 << 32) | t2) >>> 14) & 0x3ffffff",
-        "(t3 >>> 8)",
+        "(t3 >>> 8) + hibit",
     ]
     for limb, expression in enumerate(inputs):
         source = replace_once(source, f"h{limb} += {expression};",
