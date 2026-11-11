@@ -17,6 +17,6 @@ Abstract socket interface to decouple from Ktor's Socket implementation.
 
 | Name | Summary |
 |---|---|
-| [close](index.md#-1117130810%2FFunctions%2F-1357994179) | [jvm]<br>abstract fun [close](index.md#-1117130810%2FFunctions%2F-1357994179)() |
+| [close](index.md#358956095%2FFunctions%2F-1357994179) | [jvm]<br>abstract fun [close](index.md#358956095%2FFunctions%2F-1357994179)() |
 | [openReadChannel](open-read-channel.md) | [jvm]<br>abstract fun [openReadChannel](open-read-channel.md)(): ByteReadChannel |
 | [openWriteChannel](open-write-channel.md) | [jvm]<br>abstract fun [openWriteChannel](open-write-channel.md)(autoFlush: [Boolean](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-boolean/index.html) = false): ByteWriteChannel |

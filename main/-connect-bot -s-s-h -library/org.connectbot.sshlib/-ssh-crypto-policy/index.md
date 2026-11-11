@@ -18,7 +18,7 @@ Preset definitions evolve with library releases:
 - 
    [CryptoPolicyPreset.LEGACY](../-crypto-policy-preset/-l-e-g-a-c-y/index.md): modern preferences followed by compatibility algorithms, with RSA/DH minimum 1024 bits.
 
-An exact expression is an ordered comma-separated list of names. Delta entries individually use `^` (prepend), `+` (append), or `-` (exclude), for example `^curve25519-sha256,+diffie-hellman-group1-sha1,-ecdh-sha2-nistp256`. Unsupported or unavailable positive entries are skipped and reported in warnings; callers should preserve the original expression. minimumRsaBits and minimumDhBits are independent numeric requirements that explicit algorithm selections cannot bypass. The group1 example therefore also requires `minimumDhBits = 1024`.
+An exact expression is an ordered comma-separated list of names. Delta entries individually use `^` (prepend), `+` (append), or `-` (exclude), for example `^curve25519-sha256,+diffie-hellman-group1-sha1,-ecdh-sha2-nistp256`. Unsupported or unavailable positive entries are skipped and reported in [warnings](warnings.md); callers should preserve the original expression. [minimumRsaBits](minimum-rsa-bits.md) and [minimumDhBits](minimum-dh-bits.md) are independent numeric requirements that explicit algorithm selections cannot bypass. The group1 example therefore also requires `minimumDhBits = 1024`.
 
 Install platform crypto providers before resolving and apply the snapshot with [SshClientConfig.Builder.cryptoPolicy](../-ssh-client-config/-builder/crypto-policy.md). Persist user expressions and preset names, rather than the runtime [catalog](-companion/catalog.md) or resolved algorithm lists. Public-key authentication selections are independent of server host-key selections.
 

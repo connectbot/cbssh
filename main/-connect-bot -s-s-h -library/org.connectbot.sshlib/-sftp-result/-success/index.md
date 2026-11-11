@@ -5,7 +5,7 @@
 [jvm]\
 data class [Success](index.md)&lt;[T](index.md)&gt;(val value: [T](index.md)) : [SftpResult](../index.md)&lt;[T](index.md)&gt; 
 
-Operation succeeded with value.
+Operation succeeded with [value](value.md).
 
 ## Constructors
 

@@ -5,7 +5,7 @@
 [jvm]\
 data class [Success](index.md)(val elapsedNs: [Long](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-long/index.html)) : [PingResult](../index.md)
 
-The server replied; elapsedNs is the round-trip time in nanoseconds.
+The server replied; [elapsedNs](elapsed-ns.md) is the round-trip time in nanoseconds.
 
 ## Constructors
 

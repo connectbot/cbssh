@@ -5,7 +5,7 @@
 [jvm]\
 data class [Status](index.md)(val code: [Long](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-long/index.html)) : [SessionExit](../index.md)
 
-The remote process exited normally with code (`exit-status`).
+The remote process exited normally with [code](code.md) (`exit-status`).
 
 ## Constructors
 

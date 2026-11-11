@@ -5,7 +5,7 @@
 [jvm]\
 data class [Success](index.md)&lt;[T](index.md)&gt;(val value: [T](index.md)) : [AgentResult](../index.md)&lt;[T](index.md)&gt; 
 
-The provider completed successfully with value.
+The provider completed successfully with [value](value.md).
 
 ## Constructors
 

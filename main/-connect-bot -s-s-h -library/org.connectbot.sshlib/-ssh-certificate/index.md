@@ -12,7 +12,7 @@ An OpenSSH v01 certificate. Decoding checks structure, but does not establish CA
 | Name | Summary |
 |---|---|
 | [Companion](-companion/index.md) | [jvm]<br>object [Companion](-companion/index.md) |
-| [Type](-type/index.md) | [jvm]<br>enum [Type](-type/index.md) : [Enum](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-enum/index.html)&lt;[SshCertificate.Type](-type/index.md)&gt; |
+| [Type](-type/index.md) | [jvm]<br>enum class [Type](-type/index.md) : [Enum](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-enum/index.html)&lt;[SshCertificate.Type](-type/index.md)&gt; |
 
 ## Properties
 

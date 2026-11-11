@@ -5,7 +5,7 @@
 [jvm]\
 data class [Failure](index.md)(val allowedMethods: [Set](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.collections/-set/index.html)&lt;[String](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-string/index.html)&gt;) : [AuthResult](../index.md)
 
-Server rejected credentials. allowedMethods lists methods still available to try.
+Server rejected credentials. [allowedMethods](allowed-methods.md) lists methods still available to try.
 
 ## Constructors
 

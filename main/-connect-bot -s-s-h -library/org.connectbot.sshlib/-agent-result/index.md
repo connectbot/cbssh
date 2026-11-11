@@ -20,4 +20,4 @@ Provider failures are values rather than thrown exceptions so an agent backend f
 | Name | Summary |
 |---|---|
 | [Failure](-failure/index.md) | [jvm]<br>data class [Failure](-failure/index.md)(val message: [String](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-string/index.html), val cause: [Throwable](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-throwable/index.html)? = null) : [AgentResult](index.md)&lt;[Nothing](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-nothing/index.html)&gt; <br>The provider could not complete the request. |
-| [Success](-success/index.md) | [jvm]<br>data class [Success](-success/index.md)&lt;[T](-success/index.md)&gt;(val value: [T](-success/index.md)) : [AgentResult](index.md)&lt;[T](-success/index.md)&gt; <br>The provider completed successfully with value. |
+| [Success](-success/index.md) | [jvm]<br>data class [Success](-success/index.md)&lt;[T](-success/index.md)&gt;(val value: [T](-success/index.md)) : [AgentResult](index.md)&lt;[T](-success/index.md)&gt; <br>The provider completed successfully with [value](-success/value.md). |
