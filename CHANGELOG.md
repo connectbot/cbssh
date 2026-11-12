@@ -1,8 +1,21 @@
 # Changelog
 
-## [Unreleased][Unreleased]
+## [0.6.9][0.6.9]
 
 Changes for library users since `0.6.8`.
+
+### Changed
+
+- Updated vendored Bouncy Castle cryptographic implementations to 1.87.
+
+### Fixed
+
+- Replied to incoming channel requests that require responses, preventing
+  OpenSSH keepalive probes from timing out and disconnecting active sessions
+  (#415). Unsupported requests receive failure replies, while handled exit
+  notifications receive success replies.
+- Updated SNTRUP761 key exchange to bind rejection secrets to the received
+  ciphertext when rejecting invalid ciphertexts.
 
 ## [0.6.8][0.6.8]
 
@@ -328,7 +341,7 @@ Changes for library users since `0.2.1`.
 - Limited zlib decompression output per packet to reduce decompression-bomb
   denial-of-service risk.
 
-[Unreleased]: https://github.com/connectbot/cbssh/compare/v0.6.8...main
+[0.6.9]: https://github.com/connectbot/cbssh/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/connectbot/cbssh/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/connectbot/cbssh/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/connectbot/cbssh/compare/v0.6.5...v0.6.6
