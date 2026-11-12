@@ -44,6 +44,7 @@ import org.connectbot.sshlib.crypto.encodeMpint
 import org.connectbot.sshlib.crypto.encodeSshString
 import org.connectbot.sshlib.protocol.ChannelRequestExitSignal
 import org.connectbot.sshlib.protocol.ChannelRequestExitStatus
+import org.connectbot.sshlib.protocol.InvalidMessage
 import org.connectbot.sshlib.protocol.SshEnums
 import org.connectbot.sshlib.protocol.SshMsgChannelData
 import org.connectbot.sshlib.protocol.SshMsgChannelFailure
@@ -137,6 +138,7 @@ class FakeSshServer(
     private val receivedClientKexInits = Channel<SshMsgKexinit>(Channel.UNLIMITED)
     private val receivedChannelOpens = Channel<SshMsgChannelOpen>(Channel.UNLIMITED)
     private val receivedChannelRequests = Channel<SshMsgChannelRequest>(Channel.UNLIMITED)
+    private val receivedChannelReplies = Channel<Pair<SshEnums.MessageType, Long>>(Channel.UNLIMITED)
     private val receivedChannelOpenConfirmations = Channel<SshMsgChannelOpenConfirmation>(Channel.UNLIMITED)
     private val receivedChannelOpenFailures = Channel<SshMsgChannelOpenFailure>(Channel.UNLIMITED)
     private val receivedChannelData = Channel<SshMsgChannelData>(Channel.UNLIMITED)
@@ -288,6 +290,20 @@ class FakeSshServer(
                             val request = SshMsgChannelRequest(ByteBufferKaitaiStream(bodyBytes))
                             request._read()
                             receivedChannelRequests.trySend(request)
+                        }
+
+                        SshEnums.MessageType.SSH_MSG_CHANNEL_SUCCESS,
+                        SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE,
+                        -> {
+                            val body = rawBytes.copyOfRange(1, rawBytes.size)
+                            val recipient = if (msgType == SshEnums.MessageType.SSH_MSG_CHANNEL_SUCCESS) {
+                                SshMsgChannelSuccess(ByteBufferKaitaiStream(body))
+                                    .apply { _read() }.recipientChannel()
+                            } else {
+                                SshMsgChannelFailure(ByteBufferKaitaiStream(body))
+                                    .apply { _read() }.recipientChannel()
+                            }
+                            receivedChannelReplies.trySend(msgType to recipient)
                         }
 
                         SshEnums.MessageType.SSH_MSG_CHANNEL_OPEN_CONFIRMATION -> {
@@ -900,7 +916,7 @@ class FakeSshServer(
     }
 
     /** SSH_MSG_CHANNEL_REQUEST `exit-status` (RFC 4254 section 6.10). */
-    suspend fun sendChannelExitStatus(recipientChannel: Int, exitStatus: Long) {
+    suspend fun sendChannelExitStatus(recipientChannel: Int, exitStatus: Long, wantReply: Boolean = false) {
         val statusReq = ChannelRequestExitStatus().apply {
             setExitStatus(exitStatus)
             _check()
@@ -908,7 +924,7 @@ class FakeSshServer(
         val msg = SshMsgChannelRequest().apply {
             setRecipientChannel(recipientChannel.toLong())
             setRequestType(createAsciiString("exit-status"))
-            setWantReply(0)
+            setWantReply(if (wantReply) 1 else 0)
             setRequestSpecificFields(statusReq)
             _check()
         }
@@ -1037,6 +1053,21 @@ class FakeSshServer(
     suspend fun awaitChannelOpen(): SshMsgChannelOpen = receivedChannelOpens.receive()
 
     suspend fun awaitChannelRequest(): SshMsgChannelRequest = receivedChannelRequests.receive()
+
+    suspend fun awaitChannelReply(): Pair<SshEnums.MessageType, Long> = receivedChannelReplies.receive()
+
+    suspend fun sendUnknownChannelRequest(recipientChannel: Int, requestType: String, wantReply: Boolean) {
+        val request = SshMsgChannelRequest().apply {
+            setRecipientChannel(recipientChannel.toLong())
+            setRequestType(createAsciiString(requestType))
+            setWantReply(if (wantReply) 1 else 0)
+            setRequestSpecificFields(InvalidMessage().apply { _check() })
+            _check()
+        }
+        writeMutex.withLock {
+            serverIo.writePacket(SshEnums.MessageType.SSH_MSG_CHANNEL_REQUEST.id().toInt(), request.toByteArray())
+        }
+    }
 
     suspend fun awaitChannelOpenConfirmation(): SshMsgChannelOpenConfirmation = receivedChannelOpenConfirmations.receive()
 

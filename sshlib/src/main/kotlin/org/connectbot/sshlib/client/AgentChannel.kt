@@ -22,6 +22,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import org.connectbot.sshlib.SshException
+import org.connectbot.sshlib.protocol.SshChannelAcceptedTransition
 import org.connectbot.sshlib.protocol.SshChannelEffect
 import org.connectbot.sshlib.protocol.SshChannelState
 import org.connectbot.sshlib.protocol.SshChannelStateMachine
@@ -119,7 +120,7 @@ internal class AgentChannel(
         }
     }
 
-    suspend fun receiveRequest(action: suspend () -> Unit): Boolean = lifecycle.receiveRequest { action() }
+    suspend fun receiveRequest(wantReply: Boolean, action: suspend (SshChannelAcceptedTransition) -> Unit): Boolean = lifecycle.receiveRequest(wantReply, action)
 
     private suspend fun sendData(data: ByteArray) {
         var offset = 0

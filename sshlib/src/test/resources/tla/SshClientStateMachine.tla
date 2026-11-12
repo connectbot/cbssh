@@ -89,6 +89,16 @@ InboundStreamsCloseOnlyOnTermination ==
     "CLOSE_INBOUND_STREAMS" \in channelEffects =>
         channelEvent \in {"ReceiveEof", "ReceiveClose", "SendClose"}
 
+\* ReceiveRequest represents want_reply=TRUE; ReceiveRequestWithoutReply is FALSE.
+\* Replies are enqueued in the same protocol-owner operation as delivery.
+ChannelRequestsWithReplyAreAnswered ==
+    channelEvent = "ReceiveRequest" /\ "DELIVER_REQUEST" \in channelEffects =>
+        "SEND_REQUEST_REPLY" \in channelEffects
+
+ChannelRequestsWithoutReplyAreSilent ==
+    channelEvent = "ReceiveRequestWithoutReply" =>
+        "SEND_REQUEST_REPLY" \notin channelEffects
+
 InboundTerminationClosesStreams ==
     activeChannel \in ChannelIDs /\
         ChannelOperationAllowed(
@@ -170,6 +180,8 @@ ModelView ==
       transportKeysVerified,
       lastPacketDisposition,
       channels,
+      ChannelRequestsWithReplyAreAnswered,
+      ChannelRequestsWithoutReplyAreSilent,
       NoInvalidChannelSideEffects,
       ChannelIsolation>>
 
