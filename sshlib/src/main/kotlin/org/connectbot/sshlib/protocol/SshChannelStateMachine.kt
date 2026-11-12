@@ -66,6 +66,7 @@ internal enum class SshChannelEffect {
     SEND_OPEN,
     SEND_OPEN_CONFIRMATION,
     SEND_REQUEST,
+    SEND_REQUEST_REPLY,
     SEND_WINDOW_ADJUST,
 }
 
@@ -86,6 +87,7 @@ internal enum class SshChannelEventId(
     RECEIVE_DATA("ReceiveData"),
     RECEIVE_EOF("ReceiveEof"),
     RECEIVE_REQUEST("ReceiveRequest"),
+    RECEIVE_REQUEST_WITHOUT_REPLY("ReceiveRequestWithoutReply"),
     RECEIVE_WINDOW_ADJUST("ReceiveWindowAdjust"),
     SEND_CLOSE("SendClose"),
     SEND_DATA("SendData"),
@@ -124,6 +126,11 @@ internal enum class SshChannelTransitionId {
     RECEIVE_REQUEST_LOCAL_EOF,
     RECEIVE_REQUEST_REMOTE_EOF,
     RECEIVE_REQUEST_BOTH_EOF,
+    RECEIVE_REQUEST_WITHOUT_REPLY_OPEN,
+    RECEIVE_REQUEST_WITHOUT_REPLY_LOCAL_EOF,
+    RECEIVE_REQUEST_WITHOUT_REPLY_REMOTE_EOF,
+    RECEIVE_REQUEST_WITHOUT_REPLY_BOTH_EOF,
+    RECEIVE_REQUEST_WITHOUT_REPLY_CLOSE_SENT,
     RECEIVE_WINDOW_ADJUST_OPEN,
     RECEIVE_WINDOW_ADJUST_LOCAL_EOF,
     RECEIVE_WINDOW_ADJUST_REMOTE_EOF,
@@ -287,6 +294,13 @@ internal class SshChannelStateMachine(
         class ReceiveRequest(action: suspend (SshChannelAcceptedTransition) -> Unit) :
             ChannelEvent(
                 SshChannelEventId.RECEIVE_REQUEST,
+                setOf(SshChannelEffect.DELIVER_REQUEST, SshChannelEffect.SEND_REQUEST_REPLY),
+                SshChannelEventOrigin.PARSED_PACKET,
+                action,
+            )
+        class ReceiveRequestWithoutReply(action: suspend (SshChannelAcceptedTransition) -> Unit) :
+            ChannelEvent(
+                SshChannelEventId.RECEIVE_REQUEST_WITHOUT_REPLY,
                 setOf(SshChannelEffect.DELIVER_REQUEST),
                 SshChannelEventOrigin.PARSED_PACKET,
                 action,
@@ -395,6 +409,10 @@ internal class SshChannelStateMachine(
         localEof.channelTransition(ChannelEvent.ReceiveRequest {}, SshChannelTransitionId.RECEIVE_REQUEST_LOCAL_EOF)
         remoteEof.channelTransition(ChannelEvent.ReceiveRequest {}, SshChannelTransitionId.RECEIVE_REQUEST_REMOTE_EOF)
         bothEof.channelTransition(ChannelEvent.ReceiveRequest {}, SshChannelTransitionId.RECEIVE_REQUEST_BOTH_EOF)
+        open.channelTransition(ChannelEvent.ReceiveRequestWithoutReply {}, SshChannelTransitionId.RECEIVE_REQUEST_WITHOUT_REPLY_OPEN)
+        localEof.channelTransition(ChannelEvent.ReceiveRequestWithoutReply {}, SshChannelTransitionId.RECEIVE_REQUEST_WITHOUT_REPLY_LOCAL_EOF)
+        remoteEof.channelTransition(ChannelEvent.ReceiveRequestWithoutReply {}, SshChannelTransitionId.RECEIVE_REQUEST_WITHOUT_REPLY_REMOTE_EOF)
+        bothEof.channelTransition(ChannelEvent.ReceiveRequestWithoutReply {}, SshChannelTransitionId.RECEIVE_REQUEST_WITHOUT_REPLY_BOTH_EOF)
 
         open.channelTransition(ChannelEvent.ReceiveWindowAdjust {}, SshChannelTransitionId.RECEIVE_WINDOW_ADJUST_OPEN)
         localEof.channelTransition(ChannelEvent.ReceiveWindowAdjust {}, SshChannelTransitionId.RECEIVE_WINDOW_ADJUST_LOCAL_EOF)
@@ -420,6 +438,7 @@ internal class SshChannelStateMachine(
         bothEof.channelTransition(ChannelEvent.ReceiveClose {}, SshChannelTransitionId.RECEIVE_CLOSE_BOTH_EOF, closed)
         closeSent.channelTransition(ChannelEvent.ReceiveData {}, SshChannelTransitionId.RECEIVE_DATA_CLOSE_SENT, effects = emptySet())
         closeSent.channelTransition(ChannelEvent.ReceiveRequest {}, SshChannelTransitionId.RECEIVE_REQUEST_CLOSE_SENT, effects = emptySet())
+        closeSent.channelTransition(ChannelEvent.ReceiveRequestWithoutReply {}, SshChannelTransitionId.RECEIVE_REQUEST_WITHOUT_REPLY_CLOSE_SENT, effects = emptySet())
         closeSent.channelTransition(ChannelEvent.ReceiveWindowAdjust {}, SshChannelTransitionId.RECEIVE_WINDOW_ADJUST_CLOSE_SENT, effects = emptySet())
         closeSent.channelTransition(ChannelEvent.ReceiveEof {}, SshChannelTransitionId.RECEIVE_EOF_CLOSE_SENT, effects = emptySet())
         closeSent.channelTransition(
@@ -448,7 +467,7 @@ internal class SshChannelStateMachine(
     suspend fun sendData(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.SendData(action))
     suspend fun receiveData(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.ReceiveData(action))
     suspend fun sendRequest(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.SendRequest(action))
-    suspend fun receiveRequest(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.ReceiveRequest(action))
+    suspend fun receiveRequest(wantReply: Boolean, action: suspend (SshChannelAcceptedTransition) -> Unit) = process(if (wantReply) ChannelEvent.ReceiveRequest(action) else ChannelEvent.ReceiveRequestWithoutReply(action))
     suspend fun receiveWindowAdjust(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.ReceiveWindowAdjust(action))
     suspend fun sendWindowAdjust(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.SendWindowAdjust(action))
     suspend fun sendEof(action: suspend (SshChannelAcceptedTransition) -> Unit) = process(ChannelEvent.SendEof(action))

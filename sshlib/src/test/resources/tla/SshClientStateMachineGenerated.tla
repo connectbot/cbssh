@@ -1,6 +1,6 @@
 ---- MODULE SshClientStateMachineGenerated ----
 \* Generated from SshClientStateMachine. Do not edit.
-\* Model SHA-256: 958126405c9ea868782c9fe0b23f208e6f06a07369ff163a723e6f6e639d409c
+\* Model SHA-256: 72df1a93e7429b6840c52108ef22cc1b6aae7a0411f6e3aa342b1c85a413f130
 \* Lifecycle states: 12; transitions: 46.
 \* TLC distinct states count full variable valuations, not lifecycle nodes.
 EXTENDS Naturals
@@ -24,13 +24,14 @@ PacketClasses == {"ChannelOpenReply", "ChannelRequestReply", "ClientConnectionPa
 PacketDispositions == {"None", "Client", "Accepted", "Unimplemented", "Disconnected"}
 
 ChannelStates == {"BOTH_EOF", "CLOSED", "CLOSE_SENT", "LOCAL_EOF", "OPEN", "OPENING", "REMOTE_EOF", "Unallocated"}
-ChannelEvents == {"AcceptRemoteOpen", "AllocateLocalOpen", "OpenConfirmed", "OpenFailed", "ReceiveClose", "ReceiveData", "ReceiveEof", "ReceiveRequest", "ReceiveWindowAdjust", "SendClose", "SendData", "SendEof", "SendRequest", "SendWindowAdjust"}
-ChannelAttemptEvents == {"AcceptRemoteOpen", "ReceiveClose", "ReceiveData", "ReceiveEof", "ReceiveRequest", "ReceiveWindowAdjust", "SendClose", "SendData", "SendEof", "SendWindowAdjust"}
-ChannelEffectSet == {"ADJUST_WINDOW", "CLOSE_CHANNEL", "CLOSE_INBOUND_STREAMS", "COMPLETE_OPEN", "DELIVER_DATA", "DELIVER_REQUEST", "FAIL_OPEN", "SEND_CLOSE", "SEND_DATA", "SEND_EOF", "SEND_OPEN", "SEND_OPEN_CONFIRMATION", "SEND_REQUEST", "SEND_WINDOW_ADJUST"}
+ChannelEvents == {"AcceptRemoteOpen", "AllocateLocalOpen", "OpenConfirmed", "OpenFailed", "ReceiveClose", "ReceiveData", "ReceiveEof", "ReceiveRequest", "ReceiveRequestWithoutReply", "ReceiveWindowAdjust", "SendClose", "SendData", "SendEof", "SendRequest", "SendWindowAdjust"}
+ChannelAttemptEvents == {"AcceptRemoteOpen", "ReceiveClose", "ReceiveData", "ReceiveEof", "ReceiveRequest", "ReceiveRequestWithoutReply", "ReceiveWindowAdjust", "SendClose", "SendData", "SendEof", "SendWindowAdjust"}
+ChannelEffectSet == {"ADJUST_WINDOW", "CLOSE_CHANNEL", "CLOSE_INBOUND_STREAMS", "COMPLETE_OPEN", "DELIVER_DATA", "DELIVER_REQUEST", "FAIL_OPEN", "SEND_CLOSE", "SEND_DATA", "SEND_EOF", "SEND_OPEN", "SEND_OPEN_CONFIRMATION", "SEND_REQUEST", "SEND_REQUEST_REPLY", "SEND_WINDOW_ADJUST"}
 ChannelOrigins == {"ConnectionControl", "LocalCommand", "ParsedPacket"}
 ChannelTransitions == {
     <<"BOTH_EOF", "ReceiveClose", "CLOSED">>,
     <<"BOTH_EOF", "ReceiveRequest", "BOTH_EOF">>,
+    <<"BOTH_EOF", "ReceiveRequestWithoutReply", "BOTH_EOF">>,
     <<"BOTH_EOF", "ReceiveWindowAdjust", "BOTH_EOF">>,
     <<"BOTH_EOF", "SendClose", "CLOSE_SENT">>,
     <<"BOTH_EOF", "SendRequest", "BOTH_EOF">>,
@@ -38,11 +39,13 @@ ChannelTransitions == {
     <<"CLOSE_SENT", "ReceiveData", "CLOSE_SENT">>,
     <<"CLOSE_SENT", "ReceiveEof", "CLOSE_SENT">>,
     <<"CLOSE_SENT", "ReceiveRequest", "CLOSE_SENT">>,
+    <<"CLOSE_SENT", "ReceiveRequestWithoutReply", "CLOSE_SENT">>,
     <<"CLOSE_SENT", "ReceiveWindowAdjust", "CLOSE_SENT">>,
     <<"LOCAL_EOF", "ReceiveClose", "CLOSED">>,
     <<"LOCAL_EOF", "ReceiveData", "LOCAL_EOF">>,
     <<"LOCAL_EOF", "ReceiveEof", "BOTH_EOF">>,
     <<"LOCAL_EOF", "ReceiveRequest", "LOCAL_EOF">>,
+    <<"LOCAL_EOF", "ReceiveRequestWithoutReply", "LOCAL_EOF">>,
     <<"LOCAL_EOF", "ReceiveWindowAdjust", "LOCAL_EOF">>,
     <<"LOCAL_EOF", "SendClose", "CLOSE_SENT">>,
     <<"LOCAL_EOF", "SendRequest", "LOCAL_EOF">>,
@@ -51,6 +54,7 @@ ChannelTransitions == {
     <<"OPEN", "ReceiveData", "OPEN">>,
     <<"OPEN", "ReceiveEof", "REMOTE_EOF">>,
     <<"OPEN", "ReceiveRequest", "OPEN">>,
+    <<"OPEN", "ReceiveRequestWithoutReply", "OPEN">>,
     <<"OPEN", "ReceiveWindowAdjust", "OPEN">>,
     <<"OPEN", "SendClose", "CLOSE_SENT">>,
     <<"OPEN", "SendData", "OPEN">>,
@@ -61,6 +65,7 @@ ChannelTransitions == {
     <<"OPENING", "OpenFailed", "CLOSED">>,
     <<"REMOTE_EOF", "ReceiveClose", "CLOSED">>,
     <<"REMOTE_EOF", "ReceiveRequest", "REMOTE_EOF">>,
+    <<"REMOTE_EOF", "ReceiveRequestWithoutReply", "REMOTE_EOF">>,
     <<"REMOTE_EOF", "ReceiveWindowAdjust", "REMOTE_EOF">>,
     <<"REMOTE_EOF", "SendClose", "CLOSE_SENT">>,
     <<"REMOTE_EOF", "SendData", "REMOTE_EOF">>,
@@ -72,6 +77,7 @@ ChannelTransitions == {
 ChannelAuthenticationRequired == {
     <<"BOTH_EOF", "ReceiveClose">>,
     <<"BOTH_EOF", "ReceiveRequest">>,
+    <<"BOTH_EOF", "ReceiveRequestWithoutReply">>,
     <<"BOTH_EOF", "ReceiveWindowAdjust">>,
     <<"BOTH_EOF", "SendClose">>,
     <<"BOTH_EOF", "SendRequest">>,
@@ -79,11 +85,13 @@ ChannelAuthenticationRequired == {
     <<"CLOSE_SENT", "ReceiveData">>,
     <<"CLOSE_SENT", "ReceiveEof">>,
     <<"CLOSE_SENT", "ReceiveRequest">>,
+    <<"CLOSE_SENT", "ReceiveRequestWithoutReply">>,
     <<"CLOSE_SENT", "ReceiveWindowAdjust">>,
     <<"LOCAL_EOF", "ReceiveClose">>,
     <<"LOCAL_EOF", "ReceiveData">>,
     <<"LOCAL_EOF", "ReceiveEof">>,
     <<"LOCAL_EOF", "ReceiveRequest">>,
+    <<"LOCAL_EOF", "ReceiveRequestWithoutReply">>,
     <<"LOCAL_EOF", "ReceiveWindowAdjust">>,
     <<"LOCAL_EOF", "SendClose">>,
     <<"LOCAL_EOF", "SendRequest">>,
@@ -92,6 +100,7 @@ ChannelAuthenticationRequired == {
     <<"OPEN", "ReceiveData">>,
     <<"OPEN", "ReceiveEof">>,
     <<"OPEN", "ReceiveRequest">>,
+    <<"OPEN", "ReceiveRequestWithoutReply">>,
     <<"OPEN", "ReceiveWindowAdjust">>,
     <<"OPEN", "SendClose">>,
     <<"OPEN", "SendData">>,
@@ -102,6 +111,7 @@ ChannelAuthenticationRequired == {
     <<"OPENING", "OpenFailed">>,
     <<"REMOTE_EOF", "ReceiveClose">>,
     <<"REMOTE_EOF", "ReceiveRequest">>,
+    <<"REMOTE_EOF", "ReceiveRequestWithoutReply">>,
     <<"REMOTE_EOF", "ReceiveWindowAdjust">>,
     <<"REMOTE_EOF", "SendClose">>,
     <<"REMOTE_EOF", "SendData">>,
@@ -119,7 +129,8 @@ ChannelTransitionTarget(channelState, operation) ==
 
 ChannelEffectsFor(channelState, operation) ==
     CASE /\ channelState = "BOTH_EOF" /\ operation = "ReceiveClose" -> {"SEND_CLOSE", "CLOSE_INBOUND_STREAMS", "CLOSE_CHANNEL"}
-      [] /\ channelState = "BOTH_EOF" /\ operation = "ReceiveRequest" -> {"DELIVER_REQUEST"}
+      [] /\ channelState = "BOTH_EOF" /\ operation = "ReceiveRequest" -> {"DELIVER_REQUEST", "SEND_REQUEST_REPLY"}
+      [] /\ channelState = "BOTH_EOF" /\ operation = "ReceiveRequestWithoutReply" -> {"DELIVER_REQUEST"}
       [] /\ channelState = "BOTH_EOF" /\ operation = "ReceiveWindowAdjust" -> {"ADJUST_WINDOW"}
       [] /\ channelState = "BOTH_EOF" /\ operation = "SendClose" -> {"SEND_CLOSE", "CLOSE_INBOUND_STREAMS"}
       [] /\ channelState = "BOTH_EOF" /\ operation = "SendRequest" -> {"SEND_REQUEST"}
@@ -127,11 +138,13 @@ ChannelEffectsFor(channelState, operation) ==
       [] /\ channelState = "CLOSE_SENT" /\ operation = "ReceiveData" -> {}
       [] /\ channelState = "CLOSE_SENT" /\ operation = "ReceiveEof" -> {}
       [] /\ channelState = "CLOSE_SENT" /\ operation = "ReceiveRequest" -> {}
+      [] /\ channelState = "CLOSE_SENT" /\ operation = "ReceiveRequestWithoutReply" -> {}
       [] /\ channelState = "CLOSE_SENT" /\ operation = "ReceiveWindowAdjust" -> {}
       [] /\ channelState = "LOCAL_EOF" /\ operation = "ReceiveClose" -> {"SEND_CLOSE", "CLOSE_INBOUND_STREAMS", "CLOSE_CHANNEL"}
       [] /\ channelState = "LOCAL_EOF" /\ operation = "ReceiveData" -> {"DELIVER_DATA"}
       [] /\ channelState = "LOCAL_EOF" /\ operation = "ReceiveEof" -> {"CLOSE_INBOUND_STREAMS"}
-      [] /\ channelState = "LOCAL_EOF" /\ operation = "ReceiveRequest" -> {"DELIVER_REQUEST"}
+      [] /\ channelState = "LOCAL_EOF" /\ operation = "ReceiveRequest" -> {"DELIVER_REQUEST", "SEND_REQUEST_REPLY"}
+      [] /\ channelState = "LOCAL_EOF" /\ operation = "ReceiveRequestWithoutReply" -> {"DELIVER_REQUEST"}
       [] /\ channelState = "LOCAL_EOF" /\ operation = "ReceiveWindowAdjust" -> {"ADJUST_WINDOW"}
       [] /\ channelState = "LOCAL_EOF" /\ operation = "SendClose" -> {"SEND_CLOSE", "CLOSE_INBOUND_STREAMS"}
       [] /\ channelState = "LOCAL_EOF" /\ operation = "SendRequest" -> {"SEND_REQUEST"}
@@ -139,7 +152,8 @@ ChannelEffectsFor(channelState, operation) ==
       [] /\ channelState = "OPEN" /\ operation = "ReceiveClose" -> {"SEND_CLOSE", "CLOSE_INBOUND_STREAMS", "CLOSE_CHANNEL"}
       [] /\ channelState = "OPEN" /\ operation = "ReceiveData" -> {"DELIVER_DATA"}
       [] /\ channelState = "OPEN" /\ operation = "ReceiveEof" -> {"CLOSE_INBOUND_STREAMS"}
-      [] /\ channelState = "OPEN" /\ operation = "ReceiveRequest" -> {"DELIVER_REQUEST"}
+      [] /\ channelState = "OPEN" /\ operation = "ReceiveRequest" -> {"DELIVER_REQUEST", "SEND_REQUEST_REPLY"}
+      [] /\ channelState = "OPEN" /\ operation = "ReceiveRequestWithoutReply" -> {"DELIVER_REQUEST"}
       [] /\ channelState = "OPEN" /\ operation = "ReceiveWindowAdjust" -> {"ADJUST_WINDOW"}
       [] /\ channelState = "OPEN" /\ operation = "SendClose" -> {"SEND_CLOSE", "CLOSE_INBOUND_STREAMS"}
       [] /\ channelState = "OPEN" /\ operation = "SendData" -> {"SEND_DATA"}
@@ -149,7 +163,8 @@ ChannelEffectsFor(channelState, operation) ==
       [] /\ channelState = "OPENING" /\ operation = "OpenConfirmed" -> {"COMPLETE_OPEN"}
       [] /\ channelState = "OPENING" /\ operation = "OpenFailed" -> {"FAIL_OPEN"}
       [] /\ channelState = "REMOTE_EOF" /\ operation = "ReceiveClose" -> {"SEND_CLOSE", "CLOSE_INBOUND_STREAMS", "CLOSE_CHANNEL"}
-      [] /\ channelState = "REMOTE_EOF" /\ operation = "ReceiveRequest" -> {"DELIVER_REQUEST"}
+      [] /\ channelState = "REMOTE_EOF" /\ operation = "ReceiveRequest" -> {"DELIVER_REQUEST", "SEND_REQUEST_REPLY"}
+      [] /\ channelState = "REMOTE_EOF" /\ operation = "ReceiveRequestWithoutReply" -> {"DELIVER_REQUEST"}
       [] /\ channelState = "REMOTE_EOF" /\ operation = "ReceiveWindowAdjust" -> {"ADJUST_WINDOW"}
       [] /\ channelState = "REMOTE_EOF" /\ operation = "SendClose" -> {"SEND_CLOSE", "CLOSE_INBOUND_STREAMS"}
       [] /\ channelState = "REMOTE_EOF" /\ operation = "SendData" -> {"SEND_DATA"}
@@ -162,6 +177,7 @@ ChannelEffectsFor(channelState, operation) ==
 ChannelOriginFor(operation) ==
     CASE  operation = "ReceiveClose" -> "ParsedPacket"
       []  operation = "ReceiveRequest" -> "ParsedPacket"
+      []  operation = "ReceiveRequestWithoutReply" -> "ParsedPacket"
       []  operation = "ReceiveWindowAdjust" -> "ParsedPacket"
       []  operation = "SendClose" -> "LocalCommand"
       []  operation = "SendRequest" -> "LocalCommand"

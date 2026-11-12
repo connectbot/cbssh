@@ -105,6 +105,8 @@ import org.connectbot.sshlib.protocol.IdBanner
 import org.connectbot.sshlib.protocol.KexDhGexPayload
 import org.connectbot.sshlib.protocol.KexEcdhPayload
 import org.connectbot.sshlib.protocol.KexdhPayload
+import org.connectbot.sshlib.protocol.SshChannelAcceptedTransition
+import org.connectbot.sshlib.protocol.SshChannelEffect
 import org.connectbot.sshlib.protocol.SshChannelState
 import org.connectbot.sshlib.protocol.SshChannelStateMachine
 import org.connectbot.sshlib.protocol.SshClientCallbacks
@@ -2313,6 +2315,22 @@ class SshConnection(
         pending.complete(true)
     }
 
+    private suspend fun sendChannelRequestReply(recipientChannel: Int, success: Boolean) {
+        if (success) {
+            val reply = SshMsgChannelSuccess().apply {
+                setRecipientChannel(recipientChannel.toLong())
+                _check()
+            }
+            writePacket(SshEnums.MessageType.SSH_MSG_CHANNEL_SUCCESS.id().toInt(), reply.toByteArray())
+        } else {
+            val reply = SshMsgChannelFailure().apply {
+                setRecipientChannel(recipientChannel.toLong())
+                _check()
+            }
+            writePacket(SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE.id().toInt(), reply.toByteArray())
+        }
+    }
+
     private fun receiveChannelFailure(recipientChannel: Int) {
         logger.warn("Channel request failed")
         val pending = pendingChannelRequests.remove(recipientChannel)
@@ -2746,36 +2764,46 @@ class SshConnection(
                     val msg = SshMsgChannelRequest(stream)
                     msg._read()
                     val recipientChannel = msg.recipientChannel().toInt()
-                    val deliverRequest = suspend {
-                        logger.debug("Received channel request: ${msg.requestType().value()} (want_reply=${msg.wantReply() != 0})")
-                    }
-                    val requestAccepted = when (val entry = channelRegistry.findByLocalRecipient(recipientChannel)) {
-                        is SshChannelRegistry.Entry.Established.Session -> entry.channel.receiveRequest {
-                            deliverRequest()
+                    val entry = channelRegistry.findByLocalRecipient(recipientChannel)
+                        ?: throw ProtocolViolationException("Channel request for unknown channel $recipientChannel")
+                    val wantReply = msg.wantReply() != 0
+                    val deliverRequest: suspend (SshChannelAcceptedTransition) -> Unit = { transition ->
+                        if (SshChannelEffect.DELIVER_REQUEST in transition.effects) {
+                            logger.debug("Received channel request: ${msg.requestType().value()} (want_reply=$wantReply)")
                             // RFC 4254 section 6.10: surface how the remote
                             // process terminated to exitInfo waiters.
-                            when (val fields = msg.requestSpecificFields()) {
-                                is ChannelRequestExitStatus -> entry.channel.receiveExitInfo(
-                                    SessionExit.Status(fields.exitStatus()),
-                                )
+                            val handled = if (entry is SshChannelRegistry.Entry.Established.Session) {
+                                when (val fields = msg.requestSpecificFields()) {
+                                    is ChannelRequestExitStatus -> {
+                                        entry.channel.receiveExitInfo(SessionExit.Status(fields.exitStatus()))
+                                        true
+                                    }
 
-                                is ChannelRequestExitSignal -> entry.channel.receiveExitInfo(
-                                    SessionExit.Signal(
-                                        signalName = fields.signalName().data().decodeToString(),
-                                        coreDumped = fields.coreDumped() != 0,
-                                        errorMessage = fields.errorMessage().value(),
-                                    ),
-                                )
+                                    is ChannelRequestExitSignal -> {
+                                        entry.channel.receiveExitInfo(
+                                            SessionExit.Signal(
+                                                signalName = fields.signalName().data().decodeToString(),
+                                                coreDumped = fields.coreDumped() != 0,
+                                                errorMessage = fields.errorMessage().value(),
+                                            ),
+                                        )
+                                        true
+                                    }
 
-                                else -> Unit
+                                    else -> false
+                                }
+                            } else {
+                                false
+                            }
+                            if (SshChannelEffect.SEND_REQUEST_REPLY in transition.effects) {
+                                sendChannelRequestReply(entry.remoteChannelNumber, handled)
                             }
                         }
-
-                        is SshChannelRegistry.Entry.Established.Agent -> entry.channel.receiveRequest(deliverRequest)
-
-                        is SshChannelRegistry.Entry.Established.Forwarding -> entry.channel.receiveRequest(deliverRequest)
-
-                        null -> throw ProtocolViolationException("Channel request for unknown channel $recipientChannel")
+                    }
+                    val requestAccepted = when (entry) {
+                        is SshChannelRegistry.Entry.Established.Session -> entry.channel.receiveRequest(wantReply, deliverRequest)
+                        is SshChannelRegistry.Entry.Established.Agent -> entry.channel.receiveRequest(wantReply, deliverRequest)
+                        is SshChannelRegistry.Entry.Established.Forwarding -> entry.channel.receiveRequest(wantReply, deliverRequest)
                     }
                     if (!requestAccepted) {
                         throw ProtocolViolationException("Channel request is invalid for channel $recipientChannel lifecycle")

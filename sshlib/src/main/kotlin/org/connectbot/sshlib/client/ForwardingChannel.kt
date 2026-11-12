@@ -22,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import org.connectbot.sshlib.SshException
+import org.connectbot.sshlib.protocol.SshChannelAcceptedTransition
 import org.connectbot.sshlib.protocol.SshChannelEffect
 import org.connectbot.sshlib.protocol.SshChannelState
 import org.connectbot.sshlib.protocol.SshChannelStateMachine
@@ -99,7 +100,7 @@ internal class ForwardingChannel(
                 if (SshChannelEffect.DELIVER_DATA !in transition.effects) return@receiveData
                 window.consumeLocal(data.size)
                 if (incomingIngress.trySend(data).isFailure) {
-                    throw org.connectbot.sshlib.SshException("Received data for a closed forwarding stream")
+                    throw SshException("Received data for a closed forwarding stream")
                 }
             }
         ) {
@@ -159,7 +160,7 @@ internal class ForwardingChannel(
         }
     }
 
-    internal suspend fun receiveRequest(action: suspend () -> Unit): Boolean = lifecycle.receiveRequest { action() }
+    internal suspend fun receiveRequest(wantReply: Boolean, action: suspend (SshChannelAcceptedTransition) -> Unit): Boolean = lifecycle.receiveRequest(wantReply, action)
 
     private fun finishInboundDelivery() {
         inboundDeliveryOpen = false

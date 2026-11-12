@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.connectbot.sshlib.SessionExit
+import org.connectbot.sshlib.SshException
 import org.connectbot.sshlib.SshSession
 import org.connectbot.sshlib.protocol.ByteString
 import org.connectbot.sshlib.protocol.ChannelRequestEnv
@@ -38,6 +39,7 @@ import org.connectbot.sshlib.protocol.ChannelRequestPtyReq
 import org.connectbot.sshlib.protocol.ChannelRequestShell
 import org.connectbot.sshlib.protocol.ChannelRequestSubsystem
 import org.connectbot.sshlib.protocol.ChannelRequestWindowChange
+import org.connectbot.sshlib.protocol.SshChannelAcceptedTransition
 import org.connectbot.sshlib.protocol.SshChannelEffect
 import org.connectbot.sshlib.protocol.SshChannelState
 import org.connectbot.sshlib.protocol.SshChannelStateMachine
@@ -206,11 +208,11 @@ class SessionChannel internal constructor(
                 if (SshChannelEffect.DELIVER_DATA !in transition.effects) return@receiveData
                 window.consumeLocal(size)
                 if (!enqueue()) {
-                    throw org.connectbot.sshlib.SshException("Received data for a closed stdout stream")
+                    throw SshException("Received data for a closed stdout stream")
                 }
             }
         ) {
-            throw org.connectbot.sshlib.SshException("Received data after EOF or CLOSE on channel $localChannelNumber")
+            throw SshException("Received data after EOF or CLOSE on channel $localChannelNumber")
         }
     }
 
@@ -220,14 +222,14 @@ class SessionChannel internal constructor(
                 window.consumeLocal(data.size)
                 if (dataType == 1) {
                     if (stderrIngress.trySend(data).isFailure) {
-                        throw org.connectbot.sshlib.SshException("Received data for a closed stderr stream")
+                        throw SshException("Received data for a closed stderr stream")
                     }
                 } else if (extendedDataIngress.trySend(dataType to data).isFailure) {
-                    throw org.connectbot.sshlib.SshException("Received data for a closed extended-data stream")
+                    throw SshException("Received data for a closed extended-data stream")
                 }
             }
         ) {
-            throw org.connectbot.sshlib.SshException("Received extended data after EOF or CLOSE on channel $localChannelNumber")
+            throw SshException("Received extended data after EOF or CLOSE on channel $localChannelNumber")
         }
     }
 
@@ -272,7 +274,7 @@ class SessionChannel internal constructor(
                 if (window.remoteRemaining > 0) windowAvailable.trySend(Unit)
             }
         ) {
-            throw org.connectbot.sshlib.SshException("Received window adjustment after CLOSE on channel $localChannelNumber")
+            throw SshException("Received window adjustment after CLOSE on channel $localChannelNumber")
         }
     }
 
@@ -282,7 +284,7 @@ class SessionChannel internal constructor(
                 finishInboundDelivery()
             }
         ) {
-            throw org.connectbot.sshlib.SshException("Received duplicate EOF or EOF after CLOSE on channel $localChannelNumber")
+            throw SshException("Received duplicate EOF or EOF after CLOSE on channel $localChannelNumber")
         }
     }
 
@@ -348,7 +350,7 @@ class SessionChannel internal constructor(
         }
     }
 
-    internal suspend fun receiveRequest(action: suspend () -> Unit): Boolean = lifecycle.receiveRequest { action() }
+    internal suspend fun receiveRequest(wantReply: Boolean, action: suspend (SshChannelAcceptedTransition) -> Unit): Boolean = lifecycle.receiveRequest(wantReply, action)
 
     override suspend fun write(data: ByteArray) {
         if (obfuscationActive) {
@@ -378,7 +380,7 @@ class SessionChannel internal constructor(
                     }
                 }
             ) {
-                throw org.connectbot.sshlib.SshException("Cannot send data after EOF or CLOSE on channel $localChannelNumber")
+                throw SshException("Cannot send data after EOF or CLOSE on channel $localChannelNumber")
             }
             offset += admittedBytes
         }

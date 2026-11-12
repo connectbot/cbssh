@@ -49,6 +49,7 @@ import org.connectbot.sshlib.SessionExit
 import org.connectbot.sshlib.crypto.PrivateKeyReader
 import org.connectbot.sshlib.crypto.SshPublicKeyEncoder
 import org.connectbot.sshlib.protocol.ChannelRequestShell
+import org.connectbot.sshlib.protocol.SshEnums
 import org.connectbot.sshlib.transport.PipedTransport
 import org.connectbot.sshlib.transport.Transport
 import org.connectbot.sshlib.transport.TransportException
@@ -73,6 +74,46 @@ class SshConnectionFlowTest {
 
     private val acceptAllVerifier = object : HostKeyVerifier {
         override suspend fun verify(key: PublicKey): Boolean = true
+    }
+
+    @Test
+    fun `server channel keepalives receive failure in the peer channel namespace`() = runTest {
+        connectedFixture { connection, server, dispatcher ->
+            authenticate(connection, server, dispatcher)
+            val first = openSession(connection, server, dispatcher, remoteChannelNumber = 100)
+            val second = openSession(connection, server, dispatcher, remoteChannelNumber = 200)
+            repeat(3) {
+                for (session in listOf(first, second)) {
+                    server.sendUnknownChannelRequest(session.localChannelNumber, "keepalive@openssh.com", wantReply = true)
+                    assertEquals(
+                        SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE to session.remoteChannelNumber.toLong(),
+                        withTimeout(5_000) { server.awaitChannelReply() },
+                    )
+                    assertTrue(session.isOpen)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `channel requests without want reply are silent and exit status is acknowledged`() = runTest {
+        connectedFixture { connection, server, dispatcher ->
+            authenticate(connection, server, dispatcher)
+            val session = openSession(connection, server, dispatcher)
+            server.sendUnknownChannelRequest(session.localChannelNumber, "unknown@example.com", wantReply = false)
+            server.sendChannelExitStatus(session.localChannelNumber, 42, wantReply = true)
+            // The ordered success acts as a barrier: an unsolicited failure would be read first.
+            assertEquals(
+                SshEnums.MessageType.SSH_MSG_CHANNEL_SUCCESS to session.remoteChannelNumber.toLong(),
+                withTimeout(5_000) { server.awaitChannelReply() },
+            )
+            assertEquals(SessionExit.Status(42), session.exitInfo.await())
+            server.sendUnknownChannelRequest(session.localChannelNumber, "unknown@example.com", wantReply = true)
+            assertEquals(
+                SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE to session.remoteChannelNumber.toLong(),
+                withTimeout(5_000) { server.awaitChannelReply() },
+            )
+        }
     }
 
     @Test
@@ -514,6 +555,13 @@ class SshConnectionFlowTest {
 
             closing.close()
             // In flight before the server sees our CLOSE (RFC 4254 5.3).
+            server.sendUnknownChannelRequest(closing.localChannelNumber, "keepalive@openssh.com", wantReply = true)
+            server.sendChannelExitStatus(closing.localChannelNumber, 42, wantReply = true)
+            server.sendUnknownChannelRequest(other.localChannelNumber, "keepalive@openssh.com", wantReply = true)
+            assertEquals(
+                SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE to other.remoteChannelNumber.toLong(),
+                withTimeout(5_000) { server.awaitChannelReply() },
+            )
             server.sendChannelData(closing.localChannelNumber, byteArrayOf(1, 2, 3))
             server.sendChannelExtendedData(closing.localChannelNumber, 1, byteArrayOf(4))
             server.sendChannelData(other.localChannelNumber, byteArrayOf(5, 6))
@@ -714,6 +762,11 @@ class SshConnectionFlowTest {
             server.sendChannelOpenConfirmation(openRequest.senderChannel().toInt(), senderChannel = 200)
             val channel = assertNotNull(withTimeout(5_000) { open.await() })
 
+            server.sendUnknownChannelRequest(channel.localChannelNumber, "keepalive@openssh.com", wantReply = true)
+            assertEquals(
+                SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE to 200L,
+                withTimeout(5_000) { server.awaitChannelReply() },
+            )
             server.sendChannelData(channel.localChannelNumber, byteArrayOf(9, 8))
             assertContentEquals(byteArrayOf(9, 8), withTimeout(5_000) { channel.incomingData.receive() })
 
@@ -781,6 +834,11 @@ class SshConnectionFlowTest {
             assertEquals(78, confirmation.recipientChannel().toInt())
 
             val agentLocalChannel = confirmation.senderChannel().toInt()
+            server.sendUnknownChannelRequest(agentLocalChannel, "keepalive@openssh.com", wantReply = true)
+            assertEquals(
+                SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE to 78L,
+                withTimeout(5_000) { server.awaitChannelReply() },
+            )
             server.sendChannelData(agentLocalChannel, ByteBuffer.allocate(5).putInt(1).put(11).array())
             server.sendChannelWindowAdjust(agentLocalChannel, 1024)
             server.sendChannelEof(agentLocalChannel)

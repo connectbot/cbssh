@@ -220,6 +220,29 @@ class SshChannelStateMachineTest {
     }
 
     @Test
+    fun `incoming requests reply only when requested and before local close`() = runTest {
+        for (localEof in listOf(false, true)) {
+            for (remoteEof in listOf(false, true)) {
+                for (wantReply in listOf(false, true)) {
+                    val machine = SshChannelStateMachine(SshChannelState.OPEN)
+                    if (localEof) machine.sendEof {}
+                    if (remoteEof) machine.receiveEof {}
+                    assertTrue(
+                        machine.receiveRequest(wantReply) { transition ->
+                            assertTrue(SshChannelEffect.DELIVER_REQUEST in transition.effects)
+                            assertEquals(wantReply, SshChannelEffect.SEND_REQUEST_REPLY in transition.effects)
+                        },
+                    )
+                    machine.sendClose {}
+                    assertTrue(machine.receiveRequest(wantReply) { assertTrue(it.effects.isEmpty()) })
+                    machine.receiveClose {}
+                    assertFalse(machine.receiveRequest(wantReply) { error("Closed channels cannot process requests") })
+                }
+            }
+        }
+    }
+
+    @Test
     fun `remote close is terminal and duplicate close is rejected`() = runTest {
         val machine = SshChannelStateMachine(SshChannelState.OPEN)
 
