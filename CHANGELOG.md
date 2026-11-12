@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased][Unreleased]
+
+Changes for library users since `0.6.9`.
+
 ## [0.6.9][0.6.9]
 
 Changes for library users since `0.6.8`.
@@ -341,6 +345,7 @@ Changes for library users since `0.2.1`.
 - Limited zlib decompression output per packet to reduce decompression-bomb
   denial-of-service risk.
 
+[Unreleased]: https://github.com/connectbot/cbssh/compare/v0.6.9...main
 [0.6.9]: https://github.com/connectbot/cbssh/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/connectbot/cbssh/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/connectbot/cbssh/compare/v0.6.6...v0.6.7
