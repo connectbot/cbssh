@@ -41,7 +41,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup mise
-        uses: jdx/mise-action@v5.2.7
+        uses: jdx/mise-action@v5.2.8
         with:
           install: true
           install_args: actionlint shellcheck
