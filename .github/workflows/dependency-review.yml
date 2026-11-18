@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Dependency review
-        uses: actions/dependency-review-action@v5.0.0
+        uses: actions/dependency-review-action@v5.0.1
         with:
           retry-on-snapshot-warnings: true
           retry-on-snapshot-warnings-timeout: 600
