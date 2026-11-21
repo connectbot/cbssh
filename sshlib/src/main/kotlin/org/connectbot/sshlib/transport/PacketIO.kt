@@ -256,7 +256,8 @@ internal class PacketIO(
         return ReceivedPacket(
             payload = payload,
             sequenceNumber = sequenceNumber,
-            messageNumber = payload.messageNumber(),
+            // Unknown message numbers have no enum entry. Only those need the raw Kaitai instance.
+            messageNumber = payload.messageType()?.id()?.toInt() ?: payload.messageNumber(),
         )
     }
 

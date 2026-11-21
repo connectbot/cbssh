@@ -597,7 +597,7 @@ class SshConnection(
             setData(createByteString(byteArrayOf()))
             _check()
         }
-        writePacket(SshEnums.MessageType.SSH_MSG_IGNORE.id().toInt(), msg.toByteArray())
+        writePacket(SshEnums.MessageType.SSH_MSG_IGNORE.id().toInt(), msg.toByteArray(4))
     }
 
     /** Each connection owns its heartbeat, which is retired with its transport. */
@@ -2321,13 +2321,13 @@ class SshConnection(
                 setRecipientChannel(recipientChannel.toLong())
                 _check()
             }
-            writePacket(SshEnums.MessageType.SSH_MSG_CHANNEL_SUCCESS.id().toInt(), reply.toByteArray())
+            writePacket(SshEnums.MessageType.SSH_MSG_CHANNEL_SUCCESS.id().toInt(), reply.toByteArray(4))
         } else {
             val reply = SshMsgChannelFailure().apply {
                 setRecipientChannel(recipientChannel.toLong())
                 _check()
             }
-            writePacket(SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE.id().toInt(), reply.toByteArray())
+            writePacket(SshEnums.MessageType.SSH_MSG_CHANNEL_FAILURE.id().toInt(), reply.toByteArray(4))
         }
     }
 
@@ -2882,7 +2882,7 @@ class SshConnection(
                     }
 
                     SshEnums.MessageType.SSH_MSG_SERVICE_ACCEPT -> {
-                        val msg = parseBody(packet, ::SshMsgServiceAccept)
+                        val msg = packet.body() as SshMsgServiceAccept
                         requireAccepted(stateMachine.receiveServiceAccept(msg.serviceName().value()), msgType)
                     }
 
@@ -2895,7 +2895,7 @@ class SshConnection(
                     }
 
                     SshEnums.MessageType.SSH_MSG_UNIMPLEMENTED -> {
-                        logger.debug("Peer reported packet ${parseBody(packet, ::SshMsgUnimplemented).packetSequence()} as unimplemented")
+                        logger.debug("Peer reported packet {} as unimplemented", (packet.body() as SshMsgUnimplemented).packetSequence())
                     }
 
                     SshEnums.MessageType.SSH_MSG_GLOBAL_REQUEST -> {
@@ -2993,14 +2993,14 @@ class SshConnection(
                     }
 
                     SshEnums.MessageType.SSH_MSG_DISCONNECT -> {
-                        val msg = parseBody(packet, ::SshMsgDisconnect)
+                        val msg = packet.body() as SshMsgDisconnect
                         logger.info("Received SSH_MSG_DISCONNECT from server: reason=${msg.reasonCode()}, description=${msg.description().value()}")
                         requireAccepted(stateMachine.disconnect(), msgType)
                     }
 
                     SshEnums.MessageType.SSH_MSG_EXT_INFO -> {
                         requireAccepted(stateMachine.authorizeExtInfo(), msgType)
-                        processServerExtInfo(parseBody(packet, ::SshMsgExtInfo))
+                        processServerExtInfo(packet.body() as SshMsgExtInfo)
                     }
 
                     SshEnums.MessageType.SSH_MSG_PING -> {
@@ -3010,7 +3010,7 @@ class SshConnection(
                             val pong = SshMsgPong()
                             pong.setData(createByteString(msg.data().data()))
                             pong._check()
-                            writePacket(SshEnums.MessageType.SSH_MSG_PONG.id().toInt(), pong.toByteArray())
+                            writePacket(SshEnums.MessageType.SSH_MSG_PONG.id().toInt(), pong.toByteArray(4L + pong.data().lenData()))
                         }
                         pongSend()
                     }
@@ -3163,7 +3163,7 @@ class SshConnection(
         val ping = SshMsgPing()
         ping.setData(createByteString(payload))
         ping._check()
-        writePacket(SshEnums.MessageType.SSH_MSG_PING.id().toInt(), ping.toByteArray())
+        writePacket(SshEnums.MessageType.SSH_MSG_PING.id().toInt(), ping.toByteArray(4L + ping.data().lenData()))
     }
 
     internal suspend fun sendWindowAdjust(recipientChannel: Int, bytesToAdd: Int) {
@@ -3175,7 +3175,7 @@ class SshConnection(
 
         writePacket(
             SshEnums.MessageType.SSH_MSG_CHANNEL_WINDOW_ADJUST.id().toInt(),
-            msg.toByteArray(),
+            msg.toByteArray(8),
         )
     }
 
@@ -3187,7 +3187,7 @@ class SshConnection(
 
         writePacket(
             SshEnums.MessageType.SSH_MSG_CHANNEL_EOF.id().toInt(),
-            msg.toByteArray(),
+            msg.toByteArray(4),
         )
     }
 
@@ -3265,7 +3265,7 @@ class SshConnection(
         }
         writePacket(
             SshEnums.MessageType.SSH_MSG_UNIMPLEMENTED.id().toInt(),
-            msg.toByteArray(),
+            msg.toByteArray(4),
         )
     }
 
@@ -3521,7 +3521,7 @@ class SshConnection(
 
         writePacket(
             SshEnums.MessageType.SSH_MSG_CHANNEL_CLOSE.id().toInt(),
-            msg.toByteArray(),
+            msg.toByteArray(4),
         )
     }
 
@@ -3541,7 +3541,7 @@ class SshConnection(
 
                 outboundPacketController.writePacket(
                     SshEnums.MessageType.SSH_MSG_PING.id().toInt(),
-                    ping.toByteArray(),
+                    ping.toByteArray(4L + ping.data().lenData()),
                     beforeWrite = {
                         pendingPings[seq] = current.copy(sentTimeNs = System.nanoTime())
                     },
