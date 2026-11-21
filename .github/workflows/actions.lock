@@ -8,7 +8,7 @@ workflows:
         - 'actions/setup-java@v6.3.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'gradle/actions@v6.4.1'
-        - 'jdx/mise-action@v5.2.10'
+        - 'jdx/mise-action@v5.3.0'
     '.github/workflows/codeql.yml':
         - 'actions/checkout@v7.0.1'
         - 'github/codeql-action@v4.39.4'
@@ -96,8 +96,8 @@ dependencies:
         commit: 'sha1-8da46b539cd8fe6ab27ca75128919a18d757604c'
         owner_id: 124156
         repo_id: 743626948
-    'jdx/mise-action@v5.2.10':
-        ref: 'v5.2.10'
-        commit: 'sha1-90f833d396d0cc3674b631d2d225e306476c303a'
+    'jdx/mise-action@v5.3.0':
+        ref: 'v5.3.0'
+        commit: 'sha1-924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
         owner_id: 216188
         repo_id: 738284564
