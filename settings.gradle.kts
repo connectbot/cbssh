@@ -1,15 +1,20 @@
 pluginManagement {
+    resolutionStrategy {
+        eachPlugin {
+            // Resolve Vanniktech directly from its Maven Central implementation artifact.
+            if (requested.id.id == "com.vanniktech.maven.publish") {
+                useModule("com.vanniktech:gradle-maven-publish-plugin:${requested.version}")
+            }
+        }
+    }
     repositories {
         mavenCentral {
             content {
-                includeGroup("com.vanniktech.maven.publish")
                 includeGroup("com.vanniktech")
             }
         }
         gradlePluginPortal {
             content {
-                // Resolve the publishing plugin and its implementation only from Maven Central.
-                excludeGroup("com.vanniktech.maven.publish")
                 excludeGroup("com.vanniktech")
             }
         }
