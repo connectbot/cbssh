@@ -35,15 +35,19 @@ class ChaCha20Poly1305CipherTest {
             val plaintext = ByteArray(32768) { (it + sequence).toByte() }
             val length = java.nio.ByteBuffer.allocate(4).putInt(plaintext.size).array()
             val wireLength = sender.encryptLength(sequence, length)
-            val encrypted = sender.encryptPacket(wireLength, plaintext)
+            val parts = listOf(plaintext.copyOfRange(0, 2), plaintext.copyOfRange(2, 32761), plaintext.copyOfRange(32761, plaintext.size))
+            val encrypted = sender.encryptPacket(wireLength, parts)
             assertContentEquals(length, receiver.decryptLength(sequence, wireLength))
-            assertContentEquals(plaintext, receiver.decryptPacket(wireLength, encrypted))
+            val scratch = encrypted.copyOf(encrypted.size + 113)
+            val decoded = receiver.decryptPacket(wireLength, scratch, encrypted.size)
+            scratch.fill(42)
+            assertContentEquals(plaintext, decoded)
             for (offset in listOf(0, encrypted.lastIndex)) {
-                val changed = encrypted.copyOf()
+                val changed = encrypted.copyOf(encrypted.size + 113)
                 changed[offset] = (changed[offset].toInt() xor 1).toByte()
                 val rejecting = ChaCha20Poly1305Cipher(key.copyOf())
                 rejecting.decryptLength(sequence, wireLength)
-                assertFailsWith<TransportException> { rejecting.decryptPacket(wireLength, changed) }
+                assertFailsWith<TransportException> { rejecting.decryptPacket(wireLength, changed, encrypted.size) }
             }
         }
         assertFailsWith<TransportException> { receiver.decryptPacket(ByteArray(4), ByteArray(15)) }
@@ -286,7 +290,7 @@ class ChaCha20Poly1305CipherTest {
     }
 
     @Test
-    fun `constantTimeEquals is size-sensitive - different length returns false`() {
+    fun `split decryption rejects a truncated tag`() {
         val key = ByteArray(64)
         val enc = ChaCha20Poly1305Cipher(key)
         val dec = ChaCha20Poly1305Cipher(key)
@@ -296,11 +300,8 @@ class ChaCha20Poly1305CipherTest {
         val encLen = enc.encryptLength(0L, plainLength)
         val result = enc.encrypt(encLen, plaintext)
 
-        // A tag with correct bytes but wrong length would be caught by constantTimeEquals size check;
-        // verify the cipher correctly rejects a tag of different length by providing wrong data
         dec.decryptLength(0L, encLen)
         assertFailsWith<TransportException> {
-            // Pass a 15-byte tag instead of 16
             dec.decrypt(encLen, result.ciphertext, result.tag.copyOf(15))
         }
     }

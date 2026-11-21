@@ -17,6 +17,7 @@
 
 package org.connectbot.sshlib.crypto
 
+import javax.crypto.Cipher
 import javax.security.auth.Destroyable
 
 internal data class AeadResult(val ciphertext: ByteArray, val tag: ByteArray)
@@ -71,14 +72,29 @@ internal interface PacketAead : Destroyable {
      */
     fun decrypt(packetLength: ByteArray, ciphertext: ByteArray, tag: ByteArray): ByteArray
 
-    /** Decrypt a contiguous ciphertext and trailing tag, authenticating before returning plaintext. */
-    fun decryptPacket(packetLength: ByteArray, encrypted: ByteArray): ByteArray {
-        if (encrypted.size < tagLength) throw org.connectbot.sshlib.transport.TransportException("Truncated AEAD packet")
-        val length = encrypted.size - tagLength
-        return decrypt(packetLength, encrypted.copyOfRange(0, length), encrypted.copyOfRange(length, encrypted.size))
+    /** Authenticate the first [size] bytes (ciphertext and tag) and return independently owned plaintext. */
+    fun decryptPacket(packetLength: ByteArray, encrypted: ByteArray, size: Int = encrypted.size): ByteArray {
+        if (size !in tagLength..encrypted.size) throw org.connectbot.sshlib.transport.TransportException("Truncated AEAD packet")
+        val length = size - tagLength
+        return decrypt(packetLength, encrypted.copyOfRange(0, length), encrypted.copyOfRange(length, size))
     }
 
     fun encryptLength(sequenceNumber: Long, plainLength: ByteArray): ByteArray = throw UnsupportedOperationException("This cipher does not encrypt the length field")
 
     fun decryptLength(sequenceNumber: Long, encryptedLength: ByteArray): ByteArray = throw UnsupportedOperationException("This cipher does not encrypt the length field")
+}
+
+/** Feed a packet's header, payload and padding into one initialized cipher operation. */
+internal fun Cipher.encryptParts(plaintext: List<ByteArray>, output: ByteArray) {
+    var written = 0
+    for (index in 0 until plaintext.lastIndex) {
+        val part = plaintext[index]
+        written += update(part, 0, part.size, output, written)
+    }
+    if (plaintext.isEmpty()) {
+        doFinal(output, written)
+    } else {
+        val last = plaintext.last()
+        doFinal(last, 0, last.size, output, written)
+    }
 }

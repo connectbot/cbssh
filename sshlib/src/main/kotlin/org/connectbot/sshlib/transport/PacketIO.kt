@@ -75,6 +75,9 @@ internal class PacketIO(
     private var sendAead: PacketAead? = null
     private var receiveAead: PacketAead? = null
 
+    // Only the packet reader accesses this scratch space. Decoders retain owned plaintext.
+    private var encryptedInput = ByteArray(0)
+
     // Whether to use ETM (Encrypt-then-MAC) mode for each direction
     private var sendEtm: Boolean = false
     private var receiveEtm: Boolean = false
@@ -453,9 +456,15 @@ internal class PacketIO(
             throw TransportException("Invalid AEAD packet length: $packetLength")
         }
 
-        val encrypted = transport.read(packetLength + aead.tagLength)
-        bytesReceivedOnWire += encrypted.size
-        val plaintext = ByteBuffer.wrap(aead.decryptPacket(aadBytes, encrypted))
+        val wireSize = packetLength + aead.tagLength
+        val encrypted = if (transport is KtorTcpTransport) {
+            if (encryptedInput.size < wireSize) encryptedInput = ByteArray(wireSize)
+            transport.readInto(wireSize, encryptedInput)
+        } else {
+            transport.read(wireSize)
+        }
+        bytesReceivedOnWire += wireSize
+        val plaintext = ByteBuffer.wrap(aead.decryptPacket(aadBytes, encrypted, wireSize))
 
         receiveSequenceNumber++
         return extractPayloadStream(plaintext)
