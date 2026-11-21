@@ -35,7 +35,6 @@ import org.connectbot.sshlib.Timeouts
 import org.connectbot.sshlib.client.asReadOnlyBuffer
 import org.connectbot.sshlib.kaitaiParseFailureOrNull
 import org.connectbot.sshlib.protocol.ByteString
-import org.connectbot.sshlib.protocol.SftpAcceptedTransition
 import org.connectbot.sshlib.protocol.SftpCopyData
 import org.connectbot.sshlib.protocol.SftpState
 import org.connectbot.sshlib.protocol.SftpStateMachine
@@ -47,7 +46,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 
-private typealias SftpTransition = suspend (suspend (SftpAcceptedTransition) -> Unit) -> Boolean
+private typealias SftpTransition = suspend (() -> Unit) -> Boolean
 
 /**
  * Internal implementation of [SftpClient].
@@ -64,7 +63,6 @@ internal class SftpClientImpl private constructor(
     private val requestTimeoutMs: Long,
 ) : SftpClient {
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val closed = AtomicBoolean()
 
     override val isOpen: Boolean get() = !closed.get() && session.isOpen && stateMachine.state == SftpState.READY
@@ -384,7 +382,7 @@ internal class SftpClientImpl private constructor(
         transition: SftpTransition = stateMachine::request,
         timeoutMs: Long = requestTimeoutMs,
         map: (SftpRawPacket) -> SftpResult<T>,
-    ): SftpResult<T> = when (val result = dispatcher.request(type, payload, timeoutMs) { action -> transition { action() } }) {
+    ): SftpResult<T> = when (val result = dispatcher.request(type, payload, timeoutMs, transition)) {
         is SftpResult.Success -> try {
             map(result.value)
         } catch (e: SftpDecodeException) {
@@ -492,7 +490,7 @@ internal class SftpClientImpl private constructor(
             // Send SSH_FXP_INIT
             val initPayload = ByteBuffer.allocate(4)
             initPayload.putInt(SFTP_VERSION)
-            val initResult = if (stateMachine.sendInit {}) {
+            val initResult = if (stateMachine.sendInit()) {
                 dispatcher.writeRaw(SSH_FXP_INIT, initPayload.array())
             } else {
                 return SftpResult.ProtocolError("Failed to admit SFTP INIT")

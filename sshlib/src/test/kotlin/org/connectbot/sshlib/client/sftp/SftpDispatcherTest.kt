@@ -68,11 +68,11 @@ class SftpDispatcherTest {
         val release = CompletableDeferred<Unit>()
         transport.writeGate = release
         val machine = SftpStateMachine()
-        machine.sendInit {}
-        machine.receiveVersion {}
+        machine.sendInit()
+        machine.receiveVersion()
         val dispatcher = SftpDispatcher(transport, machine)
         val request = backgroundScope.async {
-            dispatcher.request(5, byteArrayOf()) { action -> machine.readFile { action() } }
+            dispatcher.request(5, byteArrayOf(), authorize = machine::readFile)
         }
         transport.awaitWrite()
         try {

@@ -66,21 +66,21 @@ internal class SftpDispatcher(
     }
 
     /**
-     * Admit and write a request as one state-machine action, then await its response
-     * after the state-machine serialization point has been released.
+     * Register the response waiter inside the state-machine action. Queue the write
+     * and await its response after releasing the lifecycle lock.
      */
     suspend fun request(
         type: Int,
         payload: ByteArray,
         timeoutMs: Long = Timeouts.DEFAULT_SFTP_REQUEST_TIMEOUT_MS,
-        authorize: suspend (suspend () -> Unit) -> Boolean,
+        authorize: suspend (() -> Unit) -> Boolean,
     ): SftpResult<SftpRawPacket> = request(type, listOf(payload), timeoutMs, authorize)
 
     suspend fun request(
         type: Int,
         payload: List<ByteArray>,
         timeoutMs: Long = Timeouts.DEFAULT_SFTP_REQUEST_TIMEOUT_MS,
-        authorize: suspend (suspend () -> Unit) -> Boolean,
+        authorize: suspend (() -> Unit) -> Boolean,
     ): SftpResult<SftpRawPacket> {
         var requestId = 0
         var deferred: CompletableDeferred<SftpRawPacket>? = null
@@ -162,7 +162,7 @@ internal class SftpDispatcher(
     suspend fun readRaw(): SftpResult<SftpRawPacket> {
         val result = packetIO.readPacket()
         if (result is SftpResult.Success && result.value.type == SSH_FXP_VERSION) {
-            stateMachine.receiveVersion { }
+            stateMachine.receiveVersion()
         }
         return result
     }
@@ -209,11 +209,11 @@ internal class SftpDispatcher(
 
                     // Notify state machine directly of incoming packet
                     when (packet.type) {
-                        SSH_FXP_STATUS -> stateMachine.receiveStatus { }
-                        SSH_FXP_HANDLE -> stateMachine.receiveHandle { }
-                        SSH_FXP_DATA -> stateMachine.receiveData { }
-                        SSH_FXP_NAME -> stateMachine.receiveName { }
-                        SSH_FXP_ATTRS -> stateMachine.receiveAttrs { }
+                        SSH_FXP_STATUS -> stateMachine.receiveStatus()
+                        SSH_FXP_HANDLE -> stateMachine.receiveHandle()
+                        SSH_FXP_DATA -> stateMachine.receiveData()
+                        SSH_FXP_NAME -> stateMachine.receiveName()
+                        SSH_FXP_ATTRS -> stateMachine.receiveAttrs()
                     }
 
                     val header = SftpFrameHeader.ResponseHeader(ByteBufferKaitaiStream(responsePayload))

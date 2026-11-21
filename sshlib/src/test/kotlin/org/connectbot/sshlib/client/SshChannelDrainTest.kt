@@ -305,8 +305,8 @@ class SshChannelDrainTest {
             val io = SftpPacketIO(session)
             val allowRead = CompletableDeferred<Unit>()
             val machine = SftpStateMachine()
-            machine.sendInit { }
-            machine.receiveVersion { }
+            machine.sendInit()
+            machine.receiveVersion()
             val dispatcher = SftpDispatcher(
                 object : SftpPacketTransport by io {
                     override suspend fun readPacket(): SftpResult<SftpRawPacket> {
@@ -319,7 +319,7 @@ class SshChannelDrainTest {
             val reader = dispatcher.startReadLoop(backgroundScope)
             try {
                 val pending = backgroundScope.async {
-                    dispatcher.request(5, byteArrayOf()) { action -> machine.readFile { action() } }
+                    dispatcher.request(5, byteArrayOf(), authorize = machine::readFile)
                 }
                 // The first request has ID 1. Observing its SSH data proves admission and write.
                 withTimeout(5_000) { server.awaitChannelData() }
