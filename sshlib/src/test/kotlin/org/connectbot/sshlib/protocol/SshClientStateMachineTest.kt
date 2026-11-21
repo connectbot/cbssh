@@ -377,13 +377,13 @@ class SshClientStateMachineTest {
         override suspend fun sendKexExchangeInit() {
             actions += "sendKexExchangeInit"
         }
-        override suspend fun receiveKexDhReply(msg: SshMsgKexdhReply) {
+        override fun receiveKexDhReply(msg: SshMsgKexdhReply) {
             actions += "receiveKexDhReply"
         }
-        override suspend fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply) {
+        override fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply) {
             actions += "receiveKexEcdhReply"
         }
-        override suspend fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply) {
+        override fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply) {
             actions += "receiveKexDhGexReply"
         }
         override fun isRekeying(): Boolean = rekeying

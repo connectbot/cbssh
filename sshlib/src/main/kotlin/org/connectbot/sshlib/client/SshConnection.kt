@@ -172,6 +172,7 @@ import java.nio.ByteBuffer
 import java.security.SecureRandom
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.CoroutineContext
 import org.connectbot.sshlib.AuthResult as PublicAuthResult
@@ -343,9 +344,9 @@ class SshConnection(
         override suspend fun sendKexInit() = this@SshConnection.sendKexInit()
         override fun receiveKexInit(msg: SshMsgKexinit, initialExchange: Boolean) = this@SshConnection.receiveKexInit(msg, initialExchange)
         override suspend fun sendKexExchangeInit() = this@SshConnection.sendKexExchangeInit()
-        override suspend fun receiveKexDhReply(msg: SshMsgKexdhReply) = this@SshConnection.receiveKexDhReply(msg)
-        override suspend fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply) = this@SshConnection.receiveKexEcdhReply(msg)
-        override suspend fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply) = this@SshConnection.receiveKexDhGexReply(msg)
+        override fun receiveKexDhReply(msg: SshMsgKexdhReply) = this@SshConnection.receiveKexDhReply(msg)
+        override fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply) = this@SshConnection.receiveKexEcdhReply(msg)
+        override fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply) = this@SshConnection.receiveKexDhGexReply(msg)
         override fun isRekeying(): Boolean = this@SshConnection.isRekeying
         override fun isAuthenticationRequestPending(): Boolean = this@SshConnection.authRequestPending
         override fun authenticationRequestStarted() {
@@ -419,8 +420,7 @@ class SshConnection(
     private var serverExtInfoReceivedCount: Int = 0
     private var clientExtInfoSent: Boolean = false
 
-    private var nextLocalChannelNumber = 0
-    private val channelNumberLock = Mutex()
+    private val nextLocalChannelNumber = AtomicInteger()
     private val channelRegistry = SshChannelRegistry()
 
     private var agentProvider: AgentProvider? = null
@@ -1529,7 +1529,7 @@ class SshConnection(
         )
     }
 
-    private suspend fun receiveKexDhReply(msg: SshMsgKexdhReply) {
+    private fun receiveKexDhReply(msg: SshMsgKexdhReply) {
         logger.info("Received DH_REPLY from server")
         completeKex(
             serverHostKey = msg.serverKey().data(),
@@ -1538,7 +1538,7 @@ class SshConnection(
         )
     }
 
-    private suspend fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply) {
+    private fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply) {
         logger.info("Received ECDH_REPLY from server")
         try {
             completeKex(
@@ -1552,7 +1552,7 @@ class SshConnection(
         }
     }
 
-    private suspend fun completeKex(serverHostKey: ByteArray, serverPublicKey: ByteArray, signature: ByteArray) {
+    private fun completeKex(serverHostKey: ByteArray, serverPublicKey: ByteArray, signature: ByteArray) {
         val kexAlg = kex ?: throw SshException(ERROR_NO_KEX_ALGORITHM_INITIALIZED)
         val sv = serverVersion ?: throw SshException("Server version not received")
         val cki = clientKexInit ?: throw SshException("Client KEX_INIT not sent")
@@ -1630,7 +1630,7 @@ class SshConnection(
         }
     }
 
-    private suspend fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply) {
+    private fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply) {
         logger.info("Received DH_GEX_REPLY from server")
         completeKex(
             serverHostKey = msg.serverPublicHostKey().data(),
@@ -2426,11 +2426,7 @@ class SshConnection(
 
     // Port forwarding support
 
-    internal suspend fun allocateChannelNumber(): Int {
-        channelNumberLock.withLock {
-            return nextLocalChannelNumber++
-        }
-    }
+    internal fun allocateChannelNumber(): Int = nextLocalChannelNumber.getAndIncrement()
 
     internal suspend fun openDirectTcpipChannel(
         host: String,

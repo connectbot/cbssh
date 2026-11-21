@@ -741,9 +741,9 @@ internal interface SshClientCallbacks {
     suspend fun sendKexInit()
     fun receiveKexInit(msg: SshMsgKexinit, initialExchange: Boolean): Boolean
     suspend fun sendKexExchangeInit()
-    suspend fun receiveKexDhReply(msg: SshMsgKexdhReply)
-    suspend fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply)
-    suspend fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply)
+    fun receiveKexDhReply(msg: SshMsgKexdhReply)
+    fun receiveKexEcdhReply(msg: SshMsgKexEcdhReply)
+    fun receiveKexDhGexReply(msg: SshMsgKexDhGexReply)
     fun isRekeying(): Boolean
     fun isAuthenticationRequestPending(): Boolean
     fun authenticationRequestStarted()
