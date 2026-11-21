@@ -18,11 +18,14 @@
 package org.connectbot.sshlib.protocol
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.yield
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -99,25 +102,24 @@ class SftpStateMachineTest {
     }
 
     @Test
-    fun `request write action is serialized with disconnect`() = runBlocking {
+    fun `request admission is serialized with disconnect`() = runBlocking {
         val machine = SftpStateMachine()
-        assertTrue(machine.sendInit { })
-        assertTrue(machine.receiveVersion { })
+        assertTrue(machine.sendInit())
+        assertTrue(machine.receiveVersion())
         val writeStarted = CompletableDeferred<Unit>()
-        val finishWrite = CompletableDeferred<Unit>()
+        val finishWrite = CountDownLatch(1)
 
-        val request = async {
+        val request = async(Dispatchers.Default) {
             machine.request {
                 writeStarted.complete(Unit)
-                finishWrite.await()
+                check(finishWrite.await(5, TimeUnit.SECONDS))
             }
         }
         writeStarted.await()
-        val disconnect = async { machine.disconnect { } }
-        yield()
+        val disconnect = async(start = CoroutineStart.UNDISPATCHED) { machine.disconnect { } }
 
         assertFalse(disconnect.isCompleted)
-        finishWrite.complete(Unit)
+        finishWrite.countDown()
         assertTrue(request.await())
         assertTrue(disconnect.await())
         assertEquals(SftpState.CLOSED, machine.state)
@@ -137,25 +139,25 @@ class SftpStateMachineTest {
     @Test
     fun `enforces response matching in state machine`() = runBlocking {
         val machine = SftpStateMachine()
-        assertTrue(machine.sendInit { })
-        assertTrue(machine.receiveVersion { })
+        assertTrue(machine.sendInit())
+        assertTrue(machine.receiveVersion())
 
         // Issue OpenFile -> expect PendingOpen
         assertTrue(machine.openFile { })
 
         // ReceiveData is declined because no READ is pending
-        assertFalse(machine.receiveData { })
+        assertFalse(machine.receiveData())
 
         // ReceiveHandle is accepted
-        assertTrue(machine.receiveHandle { })
+        assertTrue(machine.receiveHandle())
 
         // Issue ReadFile -> expect PendingRead
         assertTrue(machine.readFile { })
 
         // ReceiveHandle is declined because no OPEN is pending
-        assertFalse(machine.receiveHandle { })
+        assertFalse(machine.receiveHandle())
 
         // ReceiveData is accepted
-        assertTrue(machine.receiveData { })
+        assertTrue(machine.receiveData())
     }
 }

@@ -137,12 +137,6 @@ internal data class SftpTransitionMeta(
     val expectsPending: SftpPendingRequest? = null,
 ) : MetaInfo
 
-internal data class SftpAcceptedTransition(
-    val id: SftpTransitionId,
-    val effects: Set<SftpEffect>,
-    val origin: SftpEventOrigin,
-)
-
 internal data class SftpFormalTransition(
     val id: SftpTransitionId,
     val eventId: SftpEventId,
@@ -167,28 +161,26 @@ internal class SftpStateMachine {
         val id: SftpEventId,
         val effects: Set<SftpEffect>,
         val origin: SftpEventOrigin,
-        val action: suspend (SftpAcceptedTransition) -> Unit,
+        val action: (() -> Unit)? = null,
         val requiresReadySession: Boolean = true,
     ) : Event {
-        class SendInit(action: suspend (SftpAcceptedTransition) -> Unit) :
+        object SendInit :
             SftpEvent(
                 SftpEventId.SEND_INIT,
                 setOf(SftpEffect.SEND_INIT),
                 SftpEventOrigin.LOCAL_COMMAND,
-                action,
                 requiresReadySession = false,
             )
 
-        class ReceiveVersion(action: suspend (SftpAcceptedTransition) -> Unit) :
+        object ReceiveVersion :
             SftpEvent(
                 SftpEventId.RECEIVE_VERSION,
                 setOf(SftpEffect.RECEIVE_VERSION),
                 SftpEventOrigin.PARSED_PACKET,
-                action,
                 requiresReadySession = false,
             )
 
-        class OpenFile(action: suspend (SftpAcceptedTransition) -> Unit) :
+        class OpenFile(action: () -> Unit) :
             SftpEvent(
                 SftpEventId.OPEN_FILE,
                 setOf(SftpEffect.SEND_OPEN_FILE),
@@ -196,7 +188,7 @@ internal class SftpStateMachine {
                 action,
             )
 
-        class OpenDir(action: suspend (SftpAcceptedTransition) -> Unit) :
+        class OpenDir(action: () -> Unit) :
             SftpEvent(
                 SftpEventId.OPEN_DIR,
                 setOf(SftpEffect.SEND_OPEN_DIR),
@@ -204,7 +196,7 @@ internal class SftpStateMachine {
                 action,
             )
 
-        class ReadFile(action: suspend (SftpAcceptedTransition) -> Unit) :
+        class ReadFile(action: () -> Unit) :
             SftpEvent(
                 SftpEventId.READ_FILE,
                 setOf(SftpEffect.SEND_READ),
@@ -212,7 +204,7 @@ internal class SftpStateMachine {
                 action,
             )
 
-        class WriteFile(action: suspend (SftpAcceptedTransition) -> Unit) :
+        class WriteFile(action: () -> Unit) :
             SftpEvent(
                 SftpEventId.WRITE_FILE,
                 setOf(SftpEffect.SEND_WRITE),
@@ -220,7 +212,7 @@ internal class SftpStateMachine {
                 action,
             )
 
-        class ReadDir(action: suspend (SftpAcceptedTransition) -> Unit) :
+        class ReadDir(action: () -> Unit) :
             SftpEvent(
                 SftpEventId.READ_DIR,
                 setOf(SftpEffect.SEND_READDIR),
@@ -228,7 +220,7 @@ internal class SftpStateMachine {
                 action,
             )
 
-        class CloseHandle(action: suspend (SftpAcceptedTransition) -> Unit) :
+        class CloseHandle(action: () -> Unit) :
             SftpEvent(
                 SftpEventId.CLOSE_HANDLE,
                 setOf(SftpEffect.SEND_CLOSE_HANDLE),
@@ -236,7 +228,7 @@ internal class SftpStateMachine {
                 action,
             )
 
-        class Request(action: suspend (SftpAcceptedTransition) -> Unit) :
+        class Request(action: () -> Unit) :
             SftpEvent(
                 SftpEventId.REQUEST,
                 setOf(SftpEffect.SEND_REQUEST),
@@ -244,47 +236,42 @@ internal class SftpStateMachine {
                 action,
             )
 
-        class ReceiveHandle(action: suspend (SftpAcceptedTransition) -> Unit) :
+        object ReceiveHandle :
             SftpEvent(
                 SftpEventId.RECEIVE_HANDLE,
                 setOf(SftpEffect.DELIVER_HANDLE),
                 SftpEventOrigin.PARSED_PACKET,
-                action,
             )
 
-        class ReceiveData(action: suspend (SftpAcceptedTransition) -> Unit) :
+        object ReceiveData :
             SftpEvent(
                 SftpEventId.RECEIVE_DATA,
                 setOf(SftpEffect.DELIVER_DATA),
                 SftpEventOrigin.PARSED_PACKET,
-                action,
             )
 
-        class ReceiveName(action: suspend (SftpAcceptedTransition) -> Unit) :
+        object ReceiveName :
             SftpEvent(
                 SftpEventId.RECEIVE_NAME,
                 setOf(SftpEffect.DELIVER_NAME),
                 SftpEventOrigin.PARSED_PACKET,
-                action,
             )
 
-        class ReceiveAttrs(action: suspend (SftpAcceptedTransition) -> Unit) :
+        object ReceiveAttrs :
             SftpEvent(
                 SftpEventId.RECEIVE_ATTRS,
                 setOf(SftpEffect.DELIVER_ATTRS),
                 SftpEventOrigin.PARSED_PACKET,
-                action,
             )
 
-        class ReceiveStatus(action: suspend (SftpAcceptedTransition) -> Unit) :
+        object ReceiveStatus :
             SftpEvent(
                 SftpEventId.RECEIVE_STATUS,
                 setOf(SftpEffect.DELIVER_STATUS),
                 SftpEventOrigin.PARSED_PACKET,
-                action,
             )
 
-        class Disconnect(action: suspend (SftpAcceptedTransition) -> Unit) :
+        class Disconnect(action: () -> Unit) :
             SftpEvent(
                 SftpEventId.DISCONNECT,
                 setOf(SftpEffect.DISCONNECT_SFTP),
@@ -319,12 +306,12 @@ internal class SftpStateMachine {
         bindState(closed, SftpState.CLOSED)
 
         uninitialized.sftpTransition(
-            SftpEvent.SendInit {},
+            SftpEvent.SendInit,
             SftpTransitionId.SEND_INIT_UNINITIALIZED,
             target = waitVersion,
         )
         waitVersion.sftpTransition(
-            SftpEvent.ReceiveVersion {},
+            SftpEvent.ReceiveVersion,
             SftpTransitionId.RECEIVE_VERSION_WAIT_VERSION,
             target = ready,
         )
@@ -366,35 +353,35 @@ internal class SftpStateMachine {
         )
 
         ready.sftpTransition(
-            SftpEvent.ReceiveHandle {},
+            SftpEvent.ReceiveHandle,
             SftpTransitionId.RECEIVE_HANDLE_READY,
             expectsPending = SftpPendingRequest.OPEN,
             guard = { pendingRequests.contains(PendingRequestKind.OPEN) },
             onEffect = { pendingRequests.remove(PendingRequestKind.OPEN) },
         )
         ready.sftpTransition(
-            SftpEvent.ReceiveData {},
+            SftpEvent.ReceiveData,
             SftpTransitionId.RECEIVE_DATA_READY,
             expectsPending = SftpPendingRequest.READ,
             guard = { pendingRequests.contains(PendingRequestKind.READ) },
             onEffect = { pendingRequests.remove(PendingRequestKind.READ) },
         )
         ready.sftpTransition(
-            SftpEvent.ReceiveName {},
+            SftpEvent.ReceiveName,
             SftpTransitionId.RECEIVE_NAME_READY,
             expectsPending = SftpPendingRequest.READ_DIR,
             guard = { pendingRequests.contains(PendingRequestKind.READ_DIR) },
             onEffect = { pendingRequests.remove(PendingRequestKind.READ_DIR) },
         )
         ready.sftpTransition(
-            SftpEvent.ReceiveAttrs {},
+            SftpEvent.ReceiveAttrs,
             SftpTransitionId.RECEIVE_ATTRS_READY,
             expectsPending = SftpPendingRequest.REQUEST,
             guard = { pendingRequests.contains(PendingRequestKind.GENERIC) },
             onEffect = { pendingRequests.remove(PendingRequestKind.GENERIC) },
         )
         ready.sftpTransition(
-            SftpEvent.ReceiveStatus {},
+            SftpEvent.ReceiveStatus,
             SftpTransitionId.RECEIVE_STATUS_READY,
             expectsPending = null,
             guard = { pendingRequests.isNotEmpty() },
@@ -427,21 +414,21 @@ internal class SftpStateMachine {
 
     val state: SftpState get() = activeState
 
-    suspend fun sendInit(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.SendInit(action))
-    suspend fun receiveVersion(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.ReceiveVersion(action))
-    suspend fun openFile(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.OpenFile(action))
-    suspend fun openDir(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.OpenDir(action))
-    suspend fun readFile(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.ReadFile(action))
-    suspend fun writeFile(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.WriteFile(action))
-    suspend fun readDir(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.ReadDir(action))
-    suspend fun closeHandle(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.CloseHandle(action))
-    suspend fun request(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.Request(action))
-    suspend fun receiveHandle(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.ReceiveHandle(action))
-    suspend fun receiveData(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.ReceiveData(action))
-    suspend fun receiveName(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.ReceiveName(action))
-    suspend fun receiveAttrs(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.ReceiveAttrs(action))
-    suspend fun receiveStatus(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.ReceiveStatus(action))
-    suspend fun disconnect(action: suspend (SftpAcceptedTransition) -> Unit) = process(SftpEvent.Disconnect(action))
+    suspend fun sendInit() = process(SftpEvent.SendInit)
+    suspend fun receiveVersion() = process(SftpEvent.ReceiveVersion)
+    suspend fun openFile(action: () -> Unit) = process(SftpEvent.OpenFile(action))
+    suspend fun openDir(action: () -> Unit) = process(SftpEvent.OpenDir(action))
+    suspend fun readFile(action: () -> Unit) = process(SftpEvent.ReadFile(action))
+    suspend fun writeFile(action: () -> Unit) = process(SftpEvent.WriteFile(action))
+    suspend fun readDir(action: () -> Unit) = process(SftpEvent.ReadDir(action))
+    suspend fun closeHandle(action: () -> Unit) = process(SftpEvent.CloseHandle(action))
+    suspend fun request(action: () -> Unit) = process(SftpEvent.Request(action))
+    suspend fun receiveHandle() = process(SftpEvent.ReceiveHandle)
+    suspend fun receiveData() = process(SftpEvent.ReceiveData)
+    suspend fun receiveName() = process(SftpEvent.ReceiveName)
+    suspend fun receiveAttrs() = process(SftpEvent.ReceiveAttrs)
+    suspend fun receiveStatus() = process(SftpEvent.ReceiveStatus)
+    suspend fun disconnect(action: () -> Unit) = process(SftpEvent.Disconnect(action))
 
     internal fun formalModel(): SftpFormalModel {
         val states = collectStates(stateMachine)
@@ -506,7 +493,7 @@ internal class SftpStateMachine {
             )
         }.onTriggered {
             onEffect?.invoke()
-            it.event.action(SftpAcceptedTransition(id, effects, event.origin))
+            it.event.action?.invoke()
         }
     }
 }
