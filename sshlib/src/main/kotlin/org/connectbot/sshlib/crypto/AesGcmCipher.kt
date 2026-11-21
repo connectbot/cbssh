@@ -81,40 +81,26 @@ internal class AesGcmCipher(
         cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
         cipher.updateAAD(packetLength)
         val output = ByteArray(plaintext.sumOf { it.size } + tagLength)
-        var written = 0
-        for (index in 0 until plaintext.lastIndex) {
-            val part = plaintext[index]
-            written += cipher.update(part, 0, part.size, output, written)
-        }
-        if (plaintext.isEmpty()) {
-            cipher.doFinal(output, written)
-        } else {
-            val last = plaintext.last()
-            cipher.doFinal(last, 0, last.size, output, written)
-        }
+        cipher.encryptParts(plaintext, output)
         invocationCounter++
         return output
     }
 
     override fun decrypt(packetLength: ByteArray, ciphertext: ByteArray, tag: ByteArray): ByteArray = decryptPacket(packetLength, ciphertext + tag)
 
-    override fun decryptPacket(packetLength: ByteArray, encrypted: ByteArray): ByteArray {
-        initDecrypt(packetLength, encrypted)
+    override fun decryptPacket(packetLength: ByteArray, encrypted: ByteArray, size: Int): ByteArray {
+        if (size !in tagLength..encrypted.size) throw TransportException("Truncated AEAD packet")
+        val gcmSpec = GCMParameterSpec(128, buildNonce())
+        cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
+        cipher.updateAAD(packetLength)
 
         try {
-            val plaintext = cipher.doFinal(encrypted)
+            val plaintext = cipher.doFinal(encrypted, 0, size)
             invocationCounter++
             return plaintext
         } catch (e: AEADBadTagException) {
             throw TransportException("AEAD authentication failed", e)
         }
-    }
-
-    private fun initDecrypt(packetLength: ByteArray, encrypted: ByteArray) {
-        if (encrypted.size < tagLength) throw TransportException("Truncated AEAD packet")
-        val gcmSpec = GCMParameterSpec(128, buildNonce())
-        cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
-        cipher.updateAAD(packetLength)
     }
 
     override fun destroy() {

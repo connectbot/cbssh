@@ -218,11 +218,13 @@ class KtorTcpTransport internal constructor(
         }
     }
 
-    override suspend fun read(count: Int): ByteArray {
+    override suspend fun read(count: Int): ByteArray = readInto(count)
+
+    internal suspend fun readInto(count: Int, destination: ByteArray? = null): ByteArray {
         val channel = readChannel ?: throw TransportException("Not connected")
 
         try {
-            val buffer = ByteArray(count)
+            val buffer = destination ?: ByteArray(count)
             channel.readFully(buffer, 0, count)
             return buffer
         } catch (e: Exception) {
