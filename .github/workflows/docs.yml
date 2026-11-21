@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  assemble:
     if: >-
       github.repository == 'connectbot/cbssh' &&
       (github.event_name != 'workflow_run' ||
@@ -32,11 +32,10 @@ jobs:
     permissions:
       contents: write
       actions: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      pages: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      failures: ${{ steps.docs.outputs.failures }}
     steps:
       - name: Checkout source from main
         uses: actions/checkout@v7.0.1
@@ -75,23 +74,88 @@ jobs:
           path: ${{ runner.temp }}/docs-logs
           if-no-files-found: ignore
 
+      - name: Report source CI status
+        if: steps.docs.outputs.failures != '0' && steps.docs.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source_commit=$(git rev-parse HEAD)
+          {
+            printf '\n### Push CI for main at %s\n\n' "$source_commit"
+            if run=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+                -f "head_sha=$source_commit" -f event=push -F per_page=1 \
+                --jq '.workflow_runs[0].id // empty'); then
+              if [[ -n "$run" ]]; then
+                printf '[CI run](%s/%s/actions/runs/%s)\n\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$run"
+                gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" \
+                  --jq '.jobs[] | "- \(.name) — \(.conclusion // .status)" + ([.steps[]? | select(.conclusion == "failure") | .name] | if length > 0 then " (" + join(", ") + ")" else "" end)' \
+                  || echo 'Could not retrieve CI job results.'
+              else
+                echo 'No push CI run was found for this commit.'
+              fi
+            else
+              echo 'Could not retrieve push CI status.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set up Pages
         if: steps.docs.outputs.ready == 'true'
         uses: actions/configure-pages@v6.0.0
 
       - name: Upload complete site
         if: steps.docs.outputs.ready == 'true'
+        id: upload
         uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: ${{ runner.temp }}/docs-site
 
+      - name: Report unavailable site
+        if: steps.docs.outputs.ready != 'true'
+        run: |
+          echo '::error::No documentation site is ready. See the job summary and build logs.'
+          exit 1
+
+  deploy:
+    needs: assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Wait for Pages artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.assemble.outputs.artifact_id }}
+        run: |
+          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
+            echo '::error::Pages upload did not return an artifact ID.'
+            exit 1
+          fi
+          for delay in 1 2 4 8 16 0; do
+            if timeout 5s gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=github-pages&per_page=100" \
+                --jq '.artifacts[] | select(.expired == false) | .id' | grep -Fx "$ARTIFACT_ID"; then
+              exit 0
+            fi
+            if [[ "$delay" != 0 ]]; then sleep "$delay"; fi
+          done
+          echo "::error::Pages artifact $ARTIFACT_ID is unavailable in run $GITHUB_RUN_ID."
+          exit 1
+
       - name: Deploy to GitHub Pages
-        if: steps.docs.outputs.ready == 'true'
         id: deployment
         uses: actions/deploy-pages@v5.0.1
 
+  report:
+    needs: [assemble, deploy]
+    if: needs.assemble.result == 'success' && needs.assemble.outputs.failures != '0'
+    runs-on: ubuntu-latest
+    steps:
       - name: Report incomplete documentation
-        if: steps.docs.outputs.ready != 'true' || steps.docs.outputs.failures != '0'
         run: |
-          echo 'Some documentation builds failed. Successful versions were saved; see the job summary and build logs.'
+          echo '::error::Some documentation versions are incomplete. See the assembly job summary and build logs.'
           exit 1
