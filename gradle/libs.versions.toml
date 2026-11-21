@@ -26,7 +26,7 @@ publish = "0.37.0"
 release = "3.2.0"
 kover = "0.9.11"
 cyclonedx = "3.5.1"
-sonarqube = "7.5.0.8588"
+sonarqube = "7.6.0.18749"
 
 [libraries]
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
