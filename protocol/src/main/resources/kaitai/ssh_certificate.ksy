@@ -34,31 +34,31 @@ seq:
       any-of: [1, 2]
   - id: key_id
     type: byte_string
-  - id: principals_len
+  - id: len_principals
     type: u4
     valid:
       expr: _ <= _io.size - _io.pos
   - id: principals
     type: string_list
-    size: principals_len
+    size: len_principals
   - id: valid_after
     type: u8
   - id: valid_before
     type: u8
-  - id: critical_options_len
+  - id: len_critical_options
     type: u4
     valid:
       expr: _ <= _io.size - _io.pos
   - id: critical_options
     type: options
-    size: critical_options_len
-  - id: extensions_len
+    size: len_critical_options
+  - id: len_extensions
     type: u4
     valid:
       expr: _ <= _io.size - _io.pos
   - id: extensions
     type: options
-    size: extensions_len
+    size: len_extensions
   - id: reserved
     type: byte_string
   - id: signature_key

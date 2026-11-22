@@ -7,7 +7,7 @@ doc: >
   OpenSSH Security Key ECDSA P-256 public key blob.
   Defined in OpenSSH PROTOCOL.u2f section 3.1.
 seq:
-  - id: curve_name_len
+  - id: len_curve_name
     type: u4
     valid: 8
   - id: curve_name

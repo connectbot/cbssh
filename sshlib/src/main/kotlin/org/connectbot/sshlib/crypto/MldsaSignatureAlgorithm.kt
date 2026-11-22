@@ -64,7 +64,7 @@ internal class MldsaSignatureAlgorithm(private val parameter: MldsaAlgorithm) : 
             _check()
         }
         return SshSignature().apply {
-            setAlgorithmNameLen(parameter.sshName.length.toLong())
+            setLenAlgorithmName(parameter.sshName.length.toLong())
             setAlgorithmName(parameter.sshName)
             setSignatureBlob(body)
         }.toByteArray()
@@ -81,7 +81,7 @@ internal class MldsaSignatureAlgorithm(private val parameter: MldsaAlgorithm) : 
                 _check()
             }
             return SshPublicKey().apply {
-                setAlgorithmNameLen(keyType.length.toLong())
+                setLenAlgorithmName(keyType.length.toLong())
                 setAlgorithmName(keyType)
                 setKeyBlob(body)
             }.toByteArray()

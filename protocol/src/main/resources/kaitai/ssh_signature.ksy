@@ -18,13 +18,13 @@ doc: >
   Generic SSH signature structure. The signature blob format is defined
   by the public key algorithm.
 seq:
-- id: algorithm_name_len
+- id: len_algorithm_name
   type: u4
   valid:
     expr: _ <= _io.size - _io.pos
 - id: algorithm_name
   type: str
-  size: algorithm_name_len
+  size: len_algorithm_name
   encoding: ASCII
 - id: signature_blob
   type:

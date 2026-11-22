@@ -85,7 +85,7 @@ class SshCertificateTest {
         val option = extensions.entries().first()
         val size = option.toByteArray().size
         extensions.entries().add(option)
-        duplicate.setExtensionsLen(duplicate.extensionsLen() + size)
+        duplicate.setLenExtensions(duplicate.lenExtensions() + size)
         assertFailsWith<SshException> { SshCertificate.decode(duplicate.toByteArray()) }
         val invalidAlias = wire().apply {
             setAlgorithmName(org.connectbot.sshlib.protocol.createAsciiString("rsa-sha2-512$CERTIFICATE_SUFFIX"))

@@ -66,7 +66,7 @@ internal object MldsaP384Codec {
             _check()
         }
         return SshPublicKey().apply {
-            setAlgorithmNameLen(parameter.sshName.length.toLong())
+            setLenAlgorithmName(parameter.sshName.length.toLong())
             setAlgorithmName(parameter.sshName)
             setKeyBlob(body)
         }.toByteArray()
@@ -102,7 +102,7 @@ internal object MldsaP384Codec {
             _check()
         }
         return SshSignature().apply {
-            setAlgorithmNameLen(parameter.sshName.length.toLong())
+            setLenAlgorithmName(parameter.sshName.length.toLong())
             setAlgorithmName(parameter.sshName)
             setSignatureBlob(body)
         }.toByteArray()
