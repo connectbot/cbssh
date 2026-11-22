@@ -245,8 +245,8 @@ class BlockingSshClient internal constructor(
     /**
      * Enable SSH agent forwarding with the provided agent.
      *
-     * Must be called before opening sessions. When agent forwarding is enabled,
-     * remote servers can request signatures from your agent provider.
+     * Call after each successful [connect] and before [openSession].
+     * @see SshClient.enableAgentForwarding
      *
      * @param provider Agent implementation that handles signing requests
      */

@@ -13,6 +13,7 @@ meta:
   - channel_open_session
   - channel_open_tun_openssh
   - channel_open_x11
+  - channel_request_auth_agent_req_openssh
   - channel_request_env
   - channel_request_exec
   - channel_request_exit_signal

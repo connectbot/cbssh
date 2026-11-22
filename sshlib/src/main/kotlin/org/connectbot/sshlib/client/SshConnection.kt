@@ -423,7 +423,7 @@ class SshConnection(
     private val nextLocalChannelNumber = AtomicInteger()
     private val channelRegistry = SshChannelRegistry()
 
-    private var agentProvider: AgentProvider? = null
+    @Volatile private var agentProvider: AgentProvider? = null
     private var serverHostKeyBlob: ByteArray? = null
 
     @Volatile private var serverAdvertisesHostBound: Boolean = false
@@ -2010,9 +2010,8 @@ class SshConnection(
     /**
      * Enable SSH agent forwarding with the provided agent.
      *
-     * Must be called before the remote server opens agent channels.
-     * When agent forwarding is enabled, remote servers can request
-     * signatures from your agent provider.
+     * Call before opening session channels so they request forwarding.
+     * The provider also handles incoming agent channels on this connection.
      *
      * @param provider Agent implementation that handles signing requests
      */
@@ -2042,7 +2041,8 @@ class SshConnection(
 
             when (channelType) {
                 "auth-agent@openssh.com" -> {
-                    if (agentProvider == null) {
+                    val provider = agentProvider
+                    if (provider == null) {
                         rejectChannelOpen(senderChannel, channelType)
                         return
                     }
@@ -2062,7 +2062,7 @@ class SshConnection(
                         sessionId = verifiedSessionId.copyOf(),
                         serverHostKey = verifiedServerHostKey.copyOf(),
                     )
-                    val handler = AgentProtocolHandler(agentProvider!!, sessionInfo)
+                    val handler = AgentProtocolHandler(provider, sessionInfo)
                     val agentChannel = AgentChannel(
                         handler,
                         this,
@@ -3365,11 +3365,26 @@ class SshConnection(
     suspend fun openSessionChannel(
         initialWindowSize: Int = sessionWindowSize,
         maxPacketSize: Int = 32 * 1024,
-    ): SessionChannel? = openSessionChannel(initialWindowSize, maxPacketSize, bufferedStdout = false)
+    ): SessionChannel? = openSessionChannel(
+        initialWindowSize,
+        maxPacketSize,
+        bufferedStdout = false,
+        requestAgentForwarding = agentProvider != null,
+    )
 
-    internal suspend fun openBufferedSessionChannel(initialWindowSize: Int): SessionChannel? = openSessionChannel(initialWindowSize, 32 * 1024, bufferedStdout = true)
+    internal suspend fun openBufferedSessionChannel(initialWindowSize: Int): SessionChannel? = openSessionChannel(
+        initialWindowSize,
+        32 * 1024,
+        bufferedStdout = true,
+        requestAgentForwarding = false,
+    )
 
-    private suspend fun openSessionChannel(initialWindowSize: Int, maxPacketSize: Int, bufferedStdout: Boolean): SessionChannel? {
+    private suspend fun openSessionChannel(
+        initialWindowSize: Int,
+        maxPacketSize: Int,
+        bufferedStdout: Boolean,
+        requestAgentForwarding: Boolean,
+    ): SessionChannel? {
         val localChannelNumber = allocateChannelNumber()
 
         logger.info("Opening session channel (local=$localChannelNumber)")
@@ -3433,6 +3448,12 @@ class SshConnection(
 
         try {
             deferred.await()
+            val opened = channel ?: return null
+            if (requestAgentForwarding && !opened.requestAgentForwarding()) {
+                opened.close()
+                return null
+            }
+            return opened
         } catch (failure: Throwable) {
             if (admitted) {
                 deferred.cancel()
@@ -3442,8 +3463,6 @@ class SshConnection(
             }
             throw failure
         }
-
-        return channel
     }
 
     internal suspend fun beginChannelRequest(

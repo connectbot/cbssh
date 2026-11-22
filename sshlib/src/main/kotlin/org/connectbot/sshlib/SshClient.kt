@@ -419,8 +419,9 @@ class SshClient private constructor(
     /**
      * Enable SSH agent forwarding with the provided agent.
      *
-     * Must be called before opening sessions. When agent forwarding is enabled,
-     * remote servers can request signatures from your agent provider.
+     * Call after each successful [connect] and before [openSession]. Each session opened
+     * this way requests forwarding so the server can use your agent provider.
+     * Servers may decline forwarding. [openSftp] does not send a forwarding request.
      *
      * @param provider Agent implementation that handles signing requests
      */

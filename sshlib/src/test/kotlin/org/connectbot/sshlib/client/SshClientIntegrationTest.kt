@@ -26,6 +26,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import org.connectbot.sshlib.AgentIdentity
+import org.connectbot.sshlib.AgentProvider
+import org.connectbot.sshlib.AgentResult
+import org.connectbot.sshlib.AgentSigningContext
 import org.connectbot.sshlib.AuthHandler
 import org.connectbot.sshlib.AuthPublicKey
 import org.connectbot.sshlib.AuthResult
@@ -1688,6 +1692,34 @@ class SshClientIntegrationTest {
         } finally {
             client.disconnect()
         }
+    }
+
+    @Test
+    fun `agent forwarding creates a socket on initial connection and reconnect`() = runBlocking {
+        val client = SshClient(opensshContainer.host, acceptAllVerifier, opensshContainer.getMappedPort(22))
+        val provider = object : AgentProvider {
+            override suspend fun getIdentities() = AgentResult.Success(emptyList<AgentIdentity>())
+            override suspend fun signData(context: AgentSigningContext) = AgentResult.Success(null)
+        }
+
+        val exits = (1..2).map {
+            try {
+                withTimeout(10_000) {
+                    assertIs<ConnectResult.Success>(client.connect())
+                    assertIs<AuthResult.Success>(client.authenticatePassword(USERNAME, PASSWORD))
+                    client.enableAgentForwarding(provider)
+                    assertNotNullValue(client.openSession()).use { session ->
+                        assertTrue(session.requestPty())
+                        assertTrue(session.requestShell())
+                        session.write("test -S \"\$SSH_AUTH_SOCK\"; exit \$?\n".toByteArray())
+                        session.exitInfo.await()
+                    }
+                }
+            } finally {
+                client.disconnect()
+            }
+        }
+        assertEquals(listOf(SessionExit.Status(0), SessionExit.Status(0)), exits)
     }
 
     @Test
