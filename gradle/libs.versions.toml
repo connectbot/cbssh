@@ -22,6 +22,7 @@ logback = "1.6.8"
 testcontainers = "2.0.5"
 metalava = "0.5.1"
 dokka = "2.3.0"
+jackson = "2.22.3"
 publish = "0.37.0"
 release = "3.2.0"
 kover = "0.9.11"
@@ -29,6 +30,7 @@ cyclonedx = "3.6.1"
 sonarqube = "7.5.0.8588"
 
 [libraries]
+jackson-bom = { module = "com.fasterxml.jackson:jackson-bom", version.ref = "jackson" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 kaitai-runtime = { module = "io.kaitai:kaitai-struct-runtime", version.ref = "kaitai" }
 kaitai-compiler = { module = "io.kaitai:kaitai-struct-compiler_2.13", version.ref = "kaitai" }

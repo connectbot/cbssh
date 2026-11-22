@@ -74,6 +74,11 @@ val stageSonarInputs = tasks.register<Sync>("stageSonarInputs") {
 
 subprojects {
     val module = name
+    pluginManager.withPlugin("org.jetbrains.dokka") {
+        // Keep Dokka's Jackson dependencies aligned on a release with the security fixes.
+        dependencies.add("dokkaPlugin", dependencies.platform(libs.jackson.bom))
+    }
+
     pluginManager.withPlugin("java") {
         val sourceSets = extensions.getByType<SourceSetContainer>()
         val stageModule = tasks.register<Sync>("stageSonarModuleInputs") {
