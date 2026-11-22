@@ -48,6 +48,7 @@ import org.connectbot.sshlib.PublicKey
 import org.connectbot.sshlib.SessionExit
 import org.connectbot.sshlib.crypto.PrivateKeyReader
 import org.connectbot.sshlib.crypto.SshPublicKeyEncoder
+import org.connectbot.sshlib.protocol.ChannelRequestAuthAgentReqOpenssh
 import org.connectbot.sshlib.protocol.ChannelRequestShell
 import org.connectbot.sshlib.protocol.SshEnums
 import org.connectbot.sshlib.transport.PipedTransport
@@ -503,6 +504,36 @@ class SshConnectionFlowTest {
             assertEquals("shell", shellRequest.requestType().value())
             server.sendChannelFailure(session.localChannelNumber)
             assertEquals(false, withTimeout(5_000) { shell.await() })
+        }
+    }
+
+    @Test
+    fun `enabled agent forwarding is requested before PTY and shell`() = runTest {
+        connectedFixture { connection, server, dispatcher ->
+            authenticate(connection, server, dispatcher)
+            connection.enableAgentForwarding(
+                object : AgentProvider {
+                    override suspend fun getIdentities() = AgentResult.Success(emptyList<AgentIdentity>())
+                    override suspend fun signData(context: AgentSigningContext) = AgentResult.Success(null)
+                },
+            )
+            val session = openSession(connection, server, dispatcher, remoteChannelNumber = 200)
+            val pty = async(dispatcher) { session.requestPty() }
+            val forwarding = withTimeout(5_000) { server.awaitChannelRequest() }
+            assertEquals("auth-agent-req@openssh.com", forwarding.requestType().value())
+            assertEquals(200L, forwarding.recipientChannel())
+            assertEquals(0, forwarding.wantReply())
+            assertIs<ChannelRequestAuthAgentReqOpenssh>(forwarding.requestSpecificFields())
+            assertTrue(forwarding._io().isEof)
+
+            assertEquals("pty-req", withTimeout(5_000) { server.awaitChannelRequest() }.requestType().value())
+            server.sendChannelSuccess(session.localChannelNumber)
+            assertTrue(withTimeout(5_000) { pty.await() })
+
+            val shell = async(dispatcher) { session.requestShell() }
+            assertEquals("shell", withTimeout(5_000) { server.awaitChannelRequest() }.requestType().value())
+            server.sendChannelSuccess(session.localChannelNumber)
+            assertTrue(withTimeout(5_000) { shell.await() })
         }
     }
 

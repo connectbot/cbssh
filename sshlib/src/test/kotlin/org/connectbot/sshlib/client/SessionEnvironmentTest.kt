@@ -29,6 +29,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.connectbot.sshlib.AgentProvider
 import org.connectbot.sshlib.AuthResult
 import org.connectbot.sshlib.ConnectResult
 import org.connectbot.sshlib.HostKeyVerifier
@@ -191,9 +192,11 @@ class SessionEnvironmentTest {
         }
     }
 
-    @Test
-    fun `SFTP defaults precede subsystem startup without awaiting env replies`(): Unit = runBlocking {
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `SFTP only sends environment defaults before subsystem startup`(agentForwarding: Boolean): Unit = runBlocking {
         fixture(mapOf("LANG" to "C")) { client, server ->
+            if (agentForwarding) client.enableAgentForwarding(mockk<AgentProvider>())
             val opening = async { client.openSftp() }
             val open = server.awaitChannelOpen()
             server.sendChannelOpenConfirmation(open.senderChannel().toInt(), senderChannel = 100)

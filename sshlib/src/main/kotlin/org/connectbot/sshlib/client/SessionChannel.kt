@@ -33,6 +33,7 @@ import org.connectbot.sshlib.SessionExit
 import org.connectbot.sshlib.SshException
 import org.connectbot.sshlib.SshSession
 import org.connectbot.sshlib.protocol.ByteString
+import org.connectbot.sshlib.protocol.ChannelRequestAuthAgentReqOpenssh
 import org.connectbot.sshlib.protocol.ChannelRequestEnv
 import org.connectbot.sshlib.protocol.ChannelRequestExec
 import org.connectbot.sshlib.protocol.ChannelRequestPtyReq
@@ -484,6 +485,12 @@ class SessionChannel internal constructor(
             deferred.await()
         } finally {
             connection.finishChannelRequest(deferred)
+        }
+    }
+
+    internal suspend fun requestAgentForwarding(): Boolean = performSendRequest {
+        connection.beginChannelRequest(_remoteChannelNumber, "auth-agent-req@openssh.com", wantReply = false) { msg ->
+            msg.setRequestSpecificFields(ChannelRequestAuthAgentReqOpenssh().apply { _check() })
         }
     }
 

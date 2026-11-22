@@ -3,6 +3,7 @@ meta:
   endian: be
   imports:
   - ascii_string
+  - channel_request_auth_agent_req_openssh
   - channel_request_env
   - channel_request_exec
   - channel_request_exit_signal
@@ -29,6 +30,7 @@ seq:
     switch-on: request_type.value
     cases:
       '"pty-req"': channel_request_pty_req
+      '"auth-agent-req@openssh.com"': channel_request_auth_agent_req_openssh
       '"x11-req"': channel_request_x11_req
       '"x11"': channel_request_x11
       '"env"': channel_request_env
