@@ -7,7 +7,7 @@ fun [enableAgentForwarding](enable-agent-forwarding.md)(provider: [AgentProvider
 
 Enable SSH agent forwarding with the provided agent.
 
-Must be called before opening sessions. When agent forwarding is enabled, remote servers can request signatures from your agent provider.
+Call after each successful [connect](connect.md) and before [openSession](open-session.md).
 
 #### Parameters
 
@@ -16,3 +16,9 @@ jvm
 | | |
 |---|---|
 | provider | Agent implementation that handles signing requests |
+
+#### See also
+
+| |
+|---|
+| [SshClient.enableAgentForwarding](../../org.connectbot.sshlib/-ssh-client/enable-agent-forwarding.md) |

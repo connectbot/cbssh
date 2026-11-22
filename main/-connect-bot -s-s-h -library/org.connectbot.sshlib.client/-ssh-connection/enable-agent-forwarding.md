@@ -7,7 +7,7 @@ fun [enableAgentForwarding](enable-agent-forwarding.md)(provider: [AgentProvider
 
 Enable SSH agent forwarding with the provided agent.
 
-Must be called before the remote server opens agent channels. When agent forwarding is enabled, remote servers can request signatures from your agent provider.
+Call before opening session channels so they request forwarding. The provider also handles incoming agent channels on this connection.
 
 #### Parameters
 
