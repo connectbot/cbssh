@@ -100,7 +100,7 @@ class RawKeyFactoryTest {
     }
 }
 
-class RejectingRawKeyProvider : Provider("RejectingRawKeyProvider", 1.0, "Rejects raw key material") {
+class RejectingRawKeyProvider : Provider("RejectingRawKeyProvider", "1.0", "Rejects raw key material") {
     init {
         for (algorithm in listOf("RSA", "EC", "Ed25519", "Ed448", "X25519")) {
             put("KeyFactory.$algorithm", RejectingRawKeyFactory::class.java.name)

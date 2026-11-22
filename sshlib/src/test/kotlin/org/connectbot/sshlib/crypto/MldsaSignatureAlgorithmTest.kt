@@ -245,7 +245,7 @@ internal class MldsaSignatureAlgorithmTest {
     }
 }
 
-private class RejectingMldsaProvider : Provider("RejectingMldsa", 1.0, "Raw keys unavailable") {
+private class RejectingMldsaProvider : Provider("RejectingMldsa", "1.0", "Raw keys unavailable") {
     init {
         for (parameter in MldsaAlgorithm.entries) {
             put("KeyFactory.${parameter.jcaName}", RejectingMldsaKeyFactory::class.java.name)
